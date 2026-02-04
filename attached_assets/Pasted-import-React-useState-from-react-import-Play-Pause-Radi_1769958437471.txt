@@ -1,0 +1,144 @@
+import React, { useState } from 'react';
+import { 
+  Play, 
+  Pause,
+  Radio,
+  Volume2,
+  VolumeX,
+  Plus,
+  Minus
+} from 'lucide-react';
+
+interface RadioPlayerProps {
+  stationName?: string;
+  currentTrack?: string;
+  genre?: string;
+}
+
+const RadioPlayer: React.FC<RadioPlayerProps> = ({
+  stationName = "Afrokaviar Radio",
+  currentTrack = "Unknown Track",
+  genre = "Global Grooves"
+}) => {
+  const [volume, setVolume] = useState(80);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // Helper to increment/decrement volume within bounds
+  const adjustVolume = (delta: number) => {
+    setVolume((prev) => {
+      const next = prev + delta;
+      return Math.min(100, Math.max(0, next));
+    });
+  };
+
+  return (
+    <div className="w-full max-w-[720px] mx-auto p-4 md:p-0 select-none">
+      {/* Label Header */}
+      <div className="flex items-center space-x-3 mb-5 px-2">
+        <div className="p-1.5 bg-[#F4BE44]/10 rounded-lg">
+          <Radio className="w-4 h-4 text-[#F4BE44]" />
+        </div>
+        <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-zinc-500">
+          Live Stream
+        </h2>
+      </div>
+      
+      {/* Main Player Pill - Updated for 200px-210px height */}
+      <div className="relative bg-[#0d0d0f] rounded-[2.5rem] border border-zinc-800/60 p-8 md:p-12 min-h-[200px] flex items-center overflow-hidden shadow-2xl group transition-all duration-300">
+        
+        {/* Ambient background glow */}
+        <div className="absolute -top-24 -right-24 w-80 h-80 bg-[#F4BE44]/5 blur-[120px] pointer-events-none group-hover:bg-[#F4BE44]/10 transition-colors duration-1000" />
+        
+        <div className="relative w-full flex flex-col md:flex-row items-center justify-between gap-8 md:gap-4">
+          
+          {/* Left: Play Control & Info */}
+          <div className="flex items-center space-x-6 w-full md:w-auto">
+            {/* Play Button */}
+            <div className="relative shrink-0">
+              <button 
+                onClick={() => setIsPlaying(!isPlaying)}
+                className="w-20 h-20 md:w-24 md:h-24 bg-white rounded-full flex items-center justify-center text-black shadow-xl hover:scale-105 active:scale-95 transition-all z-10 relative group/play"
+              >
+                {isPlaying ? (
+                  <div className="flex space-x-1 items-center justify-center">
+                    <div className="w-1.5 h-8 bg-black rounded-full animate-[bounce_1s_infinite_0ms]" />
+                    <div className="w-1.5 h-5 bg-black rounded-full animate-[bounce_1s_infinite_200ms]" />
+                    <div className="w-1.5 h-6 bg-black rounded-full animate-[bounce_1s_infinite_400ms]" />
+                  </div>
+                ) : (
+                  <Play className="w-10 h-10 fill-current ml-1.5 transition-transform group-hover/play:scale-110" />
+                )}
+              </button>
+              {isPlaying && (
+                <div className="absolute inset-0 rounded-full border-2 border-white/20 animate-ping pointer-events-none" />
+              )}
+            </div>
+
+            {/* Metadata */}
+            <div className="flex flex-col space-y-2">
+              <div className="flex items-center space-x-2.5">
+                <span className="flex h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]" />
+                <span className="text-[11px] font-black text-red-500 uppercase tracking-widest">On Air</span>
+              </div>
+              <h3 className="text-2xl md:text-3xl font-normal text-white tracking-tighter leading-none">
+                {stationName}
+              </h3>
+              <div className="flex items-center space-x-2 text-sm font-bold">
+                <span className="text-[#F4BE44]">{currentTrack}</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-zinc-800" />
+                <span className="text-zinc-500 truncate max-w-[80px] md:max-w-none">{genre}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Volume Control */}
+          <div className="flex flex-col items-center md:items-end w-full md:w-auto md:border-l border-zinc-800/80 md:pl-8">
+            <div className="flex items-center space-x-4 w-full md:w-48 lg:w-56">
+              {/* Mute toggle */}
+              <button 
+                onClick={() => setVolume(v => v === 0 ? 80 : 0)} 
+                className="text-zinc-500 hover:text-white transition-colors p-1"
+              >
+                {volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+              </button>
+              
+              {/* Custom Range Slider with Sliding Dot */}
+              <div className="relative flex-1 h-8 flex items-center group/slider">
+                <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden relative">
+                  <div 
+                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-[#F4BE44] via-[#fce3a4] to-[#F4BE44] transition-all duration-150 rounded-full"
+                    style={{ width: `${volume}%` }}
+                  />
+                </div>
+
+                {/* Sliding Dot */}
+                <div 
+                  className="absolute w-4 h-4 bg-[#F4BE44] rounded-full border-2 border-white shadow-[0_0_10px_rgba(244,190,68,0.5)] transition-all duration-150 pointer-events-none"
+                  style={{ left: `calc(${volume}% - 8px)` }}
+                />
+
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="100" 
+                  value={volume}
+                  onChange={(e) => setVolume(parseInt(e.target.value))}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                />
+              </div>
+            </div>
+            
+            {/* Fine-tune volume indicators */}
+            <div className="hidden md:flex items-center space-x-4 mt-3 px-1">
+               <button onClick={() => adjustVolume(-5)} className="text-[10px] font-black text-zinc-700 hover:text-zinc-400 uppercase tracking-tighter transition-colors">Lower</button>
+               <button onClick={() => adjustVolume(5)} className="text-[10px] font-black text-zinc-700 hover:text-zinc-400 uppercase tracking-tighter transition-colors">Higher</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RadioPlayer;

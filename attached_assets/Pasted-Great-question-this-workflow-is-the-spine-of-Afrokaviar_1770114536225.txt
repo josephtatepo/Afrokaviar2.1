@@ -1,0 +1,292 @@
+Great question — this workflow is **the spine of Afrokaviar**. If you get this right, everything else (monetization, trust, growth) clicks into place.
+
+Below is the **clean, intentional, end-to-end workflow** from **Social → Music → My Library**, aligned with your roles, permissions, and UX tone.
+
+---
+
+# 🔁 Afrokaviar Content Flow
+
+**Social → Music → My Library**
+
+Think of it as **three states of value**:
+
+1. **Expression (Social)**
+2. **Curation & Monetization (Music)**
+3. **Ownership & Continuity (My Library)**
+
+Each step adds *legitimacy*, *value*, and *control*.
+
+---
+
+## 1️⃣ SOCIAL → “Expression layer” (User-generated, public)
+
+### Who
+
+* Any **logged-in member**
+* No subscription required
+
+### What users do
+
+* Upload audio files (WAV / MP3 / FLAC)
+* Content is:
+
+  * **public**
+  * **discoverable**
+  * **playable**
+* Uses a **default 40×40 thumbnail** (system-generated)
+
+### UX characteristics
+
+* Feels informal, fast, creative
+* Minimal friction
+* No pricing
+* No album polish
+* No “official” badge
+
+### Data state
+
+```text
+SocialTrack
+- visibility: public
+- status: visible
+- promotedToSongId: null
+```
+
+### User actions available
+
+* Play
+* Save (favourite in Social)
+* Share (link → requires login to view)
+* Report
+
+🚫 Users **cannot sell**, **cannot set price**, **cannot appear in Music** directly.
+
+---
+
+## 2️⃣ SOCIAL → MUSIC
+
+### “Curation gate” (Admin-controlled promotion)
+
+This is the **key trust mechanism**.
+
+### Who controls this
+
+* **Admins only**
+* Root admin (`josephtatepo@gmail.com`) controls admin access
+
+### Admin action
+
+On any SocialTrack:
+
+> **“Add to Music Catalogue”**
+
+This triggers a **promotion workflow**, not a copy-paste.
+
+---
+
+### Promotion workflow (step-by-step)
+
+#### Step 1 — Admin review
+
+Admin listens to the SocialTrack and decides:
+
+* Quality
+* Alignment with Afrokaviar taste
+* No copyright red flags
+
+#### Step 2 — Metadata enrichment (admin-only form)
+
+Admin fills:
+
+* Name
+* Artist
+* Album (optional)
+* Genre
+* Playlist
+* (Duration auto-read if possible)
+
+No price field — **price is auto-set to $1**.
+
+#### Step 3 — Publish to Music
+
+System creates a new **Song** object:
+
+```text
+Song
+- sourceSocialTrackId = socialTrack.id
+- priceCents = 100
+- status = published
+- publishedAt = now
+```
+
+The original SocialTrack:
+
+* stays public
+* is now *linked* to a Song
+* may show a subtle badge:
+
+  > “Featured in Music”
+
+### UX result
+
+* The track now appears in **Music**
+* Gets:
+
+  * “New” badge (for 48h)
+  * Thumbs up/down
+  * Favourite
+  * Preview / Buy flow
+* Gains **institutional legitimacy**
+
+This is Afrokaviar saying:
+
+> “We vouch for this.”
+
+---
+
+## 3️⃣ MUSIC → MY LIBRARY
+
+### “Ownership & continuity layer”
+
+This is where **money converts into permanence**.
+
+---
+
+### Case A — User buys a song ($1)
+
+#### User flow
+
+1. User plays a song in **Music**
+2. Hears **60s preview**
+3. Clicks **Buy $1**
+4. Completes Stripe Checkout
+
+#### System actions (automatic)
+
+* Create `Order`
+* Create `Entitlement(song_access)`
+* Create `LibraryItem(kind=purchase)`
+
+```text
+LibraryItem
+- userId
+- assetId (audio)
+- kind = purchase
+- visibility = private
+```
+
+#### UX result
+
+* Song is now:
+
+  * playable **in full**
+  * forever accessible
+  * visible in **My Library → Purchases**
+* No expiration
+* No re-payment
+* Feels like *ownership*, not rental
+
+---
+
+### Case B — User uploads private files (subscription flow)
+
+This does **not** go through Music.
+
+#### Preconditions
+
+* User has active **$5/month subscription (50GB)**
+
+#### User flow
+
+1. Goes to **My Library**
+2. Uploads files (audio, later video)
+3. Files are:
+
+   * private
+   * not discoverable
+   * not sellable
+   * playable via Library player
+
+#### Data state
+
+```text
+LibraryItem
+- kind = upload
+- visibility = private
+```
+
+These files:
+
+* never appear in Social
+* never appear in Music
+* are for **personal continuity only**
+
+---
+
+## 🔄 Important rule: Directionality (NO shortcuts)
+
+```
+Social  →  Music  →  My Library
+          ↑
+        (Admin only)
+```
+
+❌ Social → My Library (direct)
+❌ User → Music (self-publish)
+❌ User → Paid content without admin review
+
+This preserves:
+
+* quality
+* trust
+* brand value
+
+---
+
+## 🧠 Mental model (very important)
+
+### Social
+
+> “Listen to what the community is creating.”
+
+### Music
+
+> “This is what Afrokaviar stands behind.”
+
+### My Library
+
+> “This is mine.”
+
+Each step feels *earned*.
+
+---
+
+## 🧩 How this supports future upgrades (Creator Artist later)
+
+Later, when you introduce **Creator Artist** accounts:
+
+* Social uploads from creators can:
+
+  * skip review
+  * auto-publish to Music
+  * or get revenue share
+
+But **the workflow stays the same** — only permissions change.
+
+That’s good architecture.
+
+---
+
+## TL;DR (one paragraph you can paste in docs)
+
+> Content on Afrokaviar flows through three intentional stages. Users first upload tracks publicly in Social. Admins may then curate selected Social tracks into the official Music catalogue, where they become paid $1 songs with previews and quality guarantees. When users purchase a song, it is added permanently to their private My Library. Separately, users with a subscription can upload private files directly into My Library for personal use. This directional flow preserves quality, trust, and ownership while enabling monetization.
+
+---
+
+If you want next, I can:
+
+* turn this into a **sequence diagram**
+* map it directly to **Supabase tables + RLS**
+* or define **exact UI labels/buttons** so users *intuitively* understand the flow
+
+Just say which layer you want to lock next 🔒

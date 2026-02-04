@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 40" fill="none">
+  <defs>
+    <style>
+      .wordmark { font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 500; font-size: 24px; letter-spacing: 0.18em; fill: #0A0D15; }
+    </style>
+  </defs>
+  <text x="10" y="28" class="wordmark">AFRO</text>
+  <circle cx="118" cy="20" r="3.5" fill="#22D3EE"/>
+  <text x="132" y="28" class="wordmark">KAVIAR</text>
+</svg>
