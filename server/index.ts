@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { runMigrations } from 'stripe-replit-sync';
 import { getStripeSync } from './stripeClient';
 import { WebhookHandlers } from './webhookHandlers';
+import { startGitHubSyncScheduler } from './githubSync';
 
 const app = express();
 const httpServer = createServer(app);
@@ -161,6 +162,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      startGitHubSyncScheduler();
     },
   );
 })();

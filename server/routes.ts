@@ -9,6 +9,7 @@ import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { initializeChannels, runHealthCheck, checkChannelHealth, startPeriodicHealthCheck } from "./channelHealthChecker";
 import { sendInviteEmail } from "./email";
+import { syncToGitHub } from "./githubSync";
 
 const ADMIN_ROOT_EMAIL = "josephtatepo@gmail.com";
 
@@ -848,6 +849,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error setting featured content:", error);
       res.status(500).json({ message: "Failed to set featured content" });
+    }
+  });
+
+  app.post("/api/admin/github-sync", isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const repoUrl = await syncToGitHub();
+      res.json({ message: "Sync complete", repoUrl });
+    } catch (error: any) {
+      console.error("GitHub sync error:", error);
+      res.status(500).json({ message: "GitHub sync failed: " + error.message });
     }
   });
 
