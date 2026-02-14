@@ -1,59 +1,64 @@
 import type { Express } from "express";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import { isAuthenticated } from "../../auth/socialAuth";
+import { storage } from "../../storage";
+import { stripeService } from "../../stripeService";
 
-/**
- * Register object storage routes for file uploads.
- *
- * This provides example routes for the presigned URL upload flow:
- * 1. POST /api/uploads/request-url - Get a presigned URL for uploading
- * 2. The client then uploads directly to the presigned URL
- *
- * IMPORTANT: These are example routes. Customize based on your use case:
- * - Add authentication middleware for protected uploads
- * - Add file metadata storage (save to database after upload)
- * - Add ACL policies for access control
- */
+const ALLOWED_CONTENT_TYPES = [
+  "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac",
+  "image/jpeg", "image/png", "image/webp",
+  "video/mp4", "video/webm",
+  "application/pdf",
+];
+const VIDEO_TYPES = ["video/mp4", "video/webm"];
+
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
 
-  /**
-   * Request a presigned URL for file upload.
-   *
-   * Request body (JSON):
-   * {
-   *   "name": "filename.jpg",
-   *   "size": 12345,
-   *   "contentType": "image/jpeg"
-   * }
-   *
-   * Response:
-   * {
-   *   "uploadURL": "https://storage.googleapis.com/...",
-   *   "objectPath": "/objects/uploads/uuid"
-   * }
-   *
-   * IMPORTANT: The client should NOT send the file to this endpoint.
-   * Send JSON metadata only, then upload the file directly to uploadURL.
-   */
-  app.post("/api/uploads/request-url", async (req, res) => {
+  app.post("/api/uploads/request-url", isAuthenticated, async (req: any, res) => {
     try {
       const { name, size, contentType } = req.body;
 
       if (!name) {
-        return res.status(400).json({
-          error: "Missing required field: name",
-        });
+        return res.status(400).json({ error: "Missing required field: name" });
+      }
+
+      const userId = req.user?.claims?.sub || req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
+        return res.status(400).json({ error: "Unsupported file type." });
+      }
+
+      const adminUser = await storage.getAdminUser(userId);
+      const isAdminUser = !!adminUser;
+
+      if (!isAdminUser && contentType && VIDEO_TYPES.includes(contentType)) {
+        const user = await storage.getUser(userId);
+        if (!user?.stripeSubscriptionId) {
+          return res.status(403).json({ error: "Subscription required to upload videos." });
+        }
+        const subscription = await stripeService.getSubscription(user.stripeSubscriptionId);
+        if (subscription?.status !== "active") {
+          return res.status(403).json({ error: "Active subscription required to upload videos." });
+        }
+      }
+
+      if (!isAdminUser && size) {
+        const storageStats = await storage.getUserStorageStats(userId);
+        if (storageStats.usedBytes + size > storageStats.limitBytes) {
+          return res.status(403).json({ error: "Storage limit reached (200MB free)." });
+        }
       }
 
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-
-      // Extract object path from the presigned URL for later reference
       const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
 
       res.json({
         uploadURL,
         objectPath,
-        // Echo back the metadata for client convenience
         metadata: { name, size, contentType },
       });
     } catch (error) {

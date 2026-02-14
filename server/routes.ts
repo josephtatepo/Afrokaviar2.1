@@ -387,21 +387,42 @@ export async function registerRoutes(
       if (!type) {
         return res.status(400).json({ message: "Type is required" });
       }
+
+      const ALLOWED_AUDIO = ["audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac"];
+      const ALLOWED_IMAGE = ["image/jpeg", "image/png", "image/webp"];
+      const ALLOWED_VIDEO = ["video/mp4", "video/webm"];
+      const ALLOWED_DOC = ["application/pdf"];
+      const ALL_ALLOWED = [...ALLOWED_AUDIO, ...ALLOWED_IMAGE, ...ALLOWED_VIDEO, ...ALLOWED_DOC];
       
-      // Check subscription for upload type (admins get free access)
       if (type === "upload") {
-        const user = await storage.getUser(req.user.id);
         const adminUser = await storage.getAdminUser(req.user.id);
-        const isRootAdmin = req.user.email === ADMIN_ROOT_EMAIL;
+        const isAdminUser = !!adminUser;
+        const contentType = metadata?.contentType || "";
         
-        // Admins bypass subscription check
-        if (!adminUser && !isRootAdmin) {
-          if (!user?.stripeSubscriptionId) {
-            return res.status(403).json({ message: "Subscription required for library uploads" });
+        if (contentType && !ALL_ALLOWED.includes(contentType)) {
+          return res.status(400).json({ message: "Unsupported file type. Accepted: audio (MP3, M4A, WAV, FLAC), images (JPG, PNG, WEBP), video (MP4, WEBM), and PDF." });
+        }
+        
+        if (!isAdminUser) {
+          if (ALLOWED_VIDEO.includes(contentType)) {
+            const user = await storage.getUser(req.user.id);
+            if (!user?.stripeSubscriptionId) {
+              return res.status(403).json({ message: "Subscription required to upload videos. Upgrade for $5/month." });
+            }
+            const subscription = await stripeService.getSubscription(user.stripeSubscriptionId);
+            if (subscription?.status !== "active") {
+              return res.status(403).json({ message: "Active subscription required to upload videos. Upgrade for $5/month." });
+            }
           }
-          const subscription = await stripeService.getSubscription(user.stripeSubscriptionId);
-          if (subscription?.status !== "active") {
-            return res.status(403).json({ message: "Active subscription required for library uploads" });
+          
+          const storageStats = await storage.getUserStorageStats(req.user.id);
+          const newSize = fileSize || 0;
+          if (storageStats.usedBytes + newSize > storageStats.limitBytes) {
+            return res.status(403).json({ 
+              message: "Storage limit reached (200MB free). Upgrade to upload more content.",
+              usedBytes: storageStats.usedBytes,
+              limitBytes: storageStats.limitBytes,
+            });
           }
         }
       }
@@ -503,7 +524,7 @@ export async function registerRoutes(
       // Check if user is admin (admins can have 3+ char handles, regular users need 7+)
       const adminUser = await storage.getAdminUser(userId);
       const isRootAdmin = req.user.email === ADMIN_ROOT_EMAIL;
-      const minLength = (adminUser || isRootAdmin) ? 3 : 7;
+      const minLength = (adminUser || isRootAdmin) ? 3 : 6;
 
       // Validate handle
       if (!handle || handle.length < minLength) {
@@ -547,6 +568,23 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating handle:", error);
       res.status(500).json({ message: "Failed to update handle" });
+    }
+  });
+
+  app.put("/api/me/profile-image", isAuthenticated, async (req: any, res) => {
+    try {
+      const { profileImageUrl } = req.body;
+      if (!profileImageUrl) {
+        return res.status(400).json({ message: "profileImageUrl is required" });
+      }
+      const updated = await storage.updateUserProfileImage(req.user.id, profileImageUrl);
+      if (!updated) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating profile image:", error);
+      res.status(500).json({ message: "Failed to update profile image" });
     }
   });
 
@@ -664,6 +702,19 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/social-tracks/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteSocialTrack(req.params.id, req.user.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Track not found or not yours" });
+      }
+      res.json({ message: "Track deleted" });
+    } catch (error) {
+      console.error("Error deleting social track:", error);
+      res.status(500).json({ message: "Failed to delete track" });
+    }
+  });
+
   // Submit track for sale (user requests promotion to Music)
   app.post("/api/social-tracks/:id/submit-for-sale", isAuthenticated, async (req: any, res) => {
     try {
@@ -721,6 +772,175 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error promoting track:", error);
       res.status(500).json({ message: "Failed to promote track" });
+    }
+  });
+
+  app.post("/api/admin/add-admin", isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const { email, role } = req.body;
+      
+      const callerAdmin = await storage.getAdminUser(req.user.id);
+      if (!callerAdmin || callerAdmin.role !== "root_admin") {
+        return res.status(403).json({ message: "Only root admin can add admins" });
+      }
+      
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+      
+      if (!["admin", "root_admin"].includes(role)) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+      
+      const targetUser = await storage.getUserByEmail(email);
+      if (!targetUser) {
+        return res.status(404).json({ message: "No user found with this email. They need to sign up first." });
+      }
+      
+      const existingAdmin = await storage.getAdminUser(targetUser.id);
+      if (existingAdmin) {
+        return res.status(400).json({ message: "This user is already an admin" });
+      }
+      
+      const admin = await storage.createAdminUser({
+        userId: targetUser.id,
+        role,
+        invitedBy: req.user.id,
+      });
+      
+      res.json({ message: `${email} has been added as ${role}`, admin });
+    } catch (error) {
+      console.error("Error adding admin:", error);
+      res.status(500).json({ message: "Failed to add admin" });
+    }
+  });
+
+  app.put("/api/admin/channels/:id/validate", isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const { validated } = req.body;
+      const channel = await storage.toggleChannelValidation(req.params.id, validated);
+      if (!channel) {
+        return res.status(404).json({ message: "Channel not found" });
+      }
+      res.json(channel);
+    } catch (error) {
+      console.error("Error validating channel:", error);
+      res.status(500).json({ message: "Failed to validate channel" });
+    }
+  });
+
+  // === Social Posts ===
+
+  app.get("/api/social-posts", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const posts = await storage.getSocialPosts(limit, offset);
+
+      const postsWithAuthors = await Promise.all(
+        posts.map(async (post) => {
+          const user = await storage.getUser(post.authorId);
+          return {
+            ...post,
+            authorHandle: user?.handle || user?.firstName || "user",
+            authorName: user?.firstName || user?.handle || "User",
+            authorImage: user?.profileImageUrl || null,
+          };
+        })
+      );
+
+      res.json(postsWithAuthors);
+    } catch (error) {
+      console.error("Error fetching social posts:", error);
+      res.status(500).json({ message: "Failed to fetch social posts" });
+    }
+  });
+
+  app.post("/api/social-posts", isAuthenticated, async (req: any, res) => {
+    try {
+      const { textContent, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl } = req.body;
+
+      if (!textContent && !imageUrl && !audioUrl && !videoUrl) {
+        return res.status(400).json({ message: "Post must have text, image, audio, or video content" });
+      }
+
+      const post = await storage.createSocialPost({
+        textContent: textContent || null,
+        imageUrl: imageUrl || null,
+        audioUrl: audioUrl || null,
+        audioTitle: audioTitle || null,
+        audioDuration: audioDuration || null,
+        videoUrl: videoUrl || null,
+        authorId: req.user.id,
+      });
+
+      if (audioUrl) {
+        try {
+          await storage.createSocialTrack({
+            title: audioTitle || "Untitled",
+            audioUrl,
+            uploadedBy: req.user.id,
+            status: "approved",
+          });
+        } catch (e) {
+          console.error("Failed to also create social track from post:", e);
+        }
+      }
+
+      const user = await storage.getUser(req.user.id);
+      res.json({
+        ...post,
+        authorHandle: user?.handle || user?.firstName || "user",
+        authorName: user?.firstName || user?.handle || "User",
+        authorImage: user?.profileImageUrl || null,
+      });
+    } catch (error) {
+      console.error("Error creating social post:", error);
+      res.status(500).json({ message: "Failed to create social post" });
+    }
+  });
+
+  app.delete("/api/social-posts/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteSocialPost(req.params.id, req.user.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Post not found or not yours" });
+      }
+      res.json({ message: "Post deleted" });
+    } catch (error) {
+      console.error("Error deleting social post:", error);
+      res.status(500).json({ message: "Failed to delete post" });
+    }
+  });
+
+  app.post("/api/social-posts/:id/like", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.likeSocialPost(req.user.id, req.params.id);
+      res.json({ liked: true });
+    } catch (error) {
+      console.error("Error liking post:", error);
+      res.status(500).json({ message: "Failed to like post" });
+    }
+  });
+
+  app.delete("/api/social-posts/:id/like", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.unlikeSocialPost(req.user.id, req.params.id);
+      res.json({ liked: false });
+    } catch (error) {
+      console.error("Error unliking post:", error);
+      res.status(500).json({ message: "Failed to unlike post" });
+    }
+  });
+
+  app.get("/api/social-posts/likes", isAuthenticated, async (req: any, res) => {
+    try {
+      const postIds = (req.query.postIds as string || "").split(",").filter(Boolean);
+      const likedIds = await storage.getSocialPostLikes(req.user.id, postIds);
+      res.json(likedIds);
+    } catch (error) {
+      console.error("Error fetching post likes:", error);
+      res.status(500).json({ message: "Failed to fetch likes" });
     }
   });
 

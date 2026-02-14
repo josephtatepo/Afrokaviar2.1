@@ -30,6 +30,12 @@ Preferred communication style: Simple, everyday language.
 - **Object Storage**: Google Cloud Storage via Replit's sidecar service for file uploads
 - **Session Storage**: PostgreSQL-backed sessions using connect-pg-simple
 
+### Internationalization (i18n)
+- **System**: Custom React context-based i18n with English/French support
+- **Location**: `client/src/lib/i18n.tsx` with translations dictionary
+- **Toggle**: Language toggle button (EN/FR) in header near profile
+- **Persistence**: Language preference saved in localStorage
+
 ### Authentication
 - **Provider**: Replit OpenID Connect (OIDC) authentication
 - **Session Management**: Express sessions with PostgreSQL store
@@ -39,7 +45,7 @@ Preferred communication style: Simple, everyday language.
 ### Database Schema Models
 - **Auth**: Users and sessions (mandatory for Replit Auth)
 - **Music**: Songs with metadata, reactions, and favorites
-- **Social**: Social tracks with saves and reports
+- **Social**: Social tracks with saves and reports, social posts with text/image/audio/video
 - **Library**: User library items with playback progress and storage tracking
 - **Orders**: Order management with items and entitlements
 - **Admin**: Admin user roles and permissions
@@ -52,11 +58,19 @@ Preferred communication style: Simple, everyday language.
 - **API Endpoints**: GET /api/channels (with ?online=true filter), POST /api/channels/:id/check
 - **Client Fallback**: Graceful error UI when streams fail to load, with retry option
 
+### User Library & Storage System
+- **Free Storage**: 200MB per user, admins get unlimited
+- **Supported File Types**: Audio (MP3, M4A, WAV, FLAC), Images (JPG, PNG, WEBP), Video (MP4, WEBM), PDF
+- **Video Upload**: Requires $5/month subscription (admins exempt)
+- **Storage Enforcement**: Server-side checks on both presigned URL request and library item creation
+- **Content Viewers**: Inline image viewer, video player, PDF reader, audio player in library
+- **File Category Tracking**: contentType stored in library item metadata for proper icon/viewer selection
+
 ### Key Design Patterns
 - **Shared Types**: Schema definitions in `shared/` are used by both client and server
 - **Path Aliases**: `@/` for client source, `@shared/` for shared code
 - **Storage Interface**: `IStorage` interface abstracts database operations
-- **Presigned URL Uploads**: Two-step flow - request URL from backend, upload directly to storage
+- **Presigned URL Uploads**: Two-step flow - request URL from backend (authenticated), upload directly to storage
 
 ## External Dependencies
 

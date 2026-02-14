@@ -1,0 +1,358 @@
+import React, { useState } from 'react';
+import { 
+  Radio, 
+  Tv, 
+  Users, 
+  Music, 
+  Library, 
+  Search, 
+  Bell, 
+  Settings, 
+  MoreHorizontal, 
+  Heart, 
+  MessageCircle, 
+  Share2, 
+  Play, 
+  Plus, 
+  Image as ImageIcon,
+  Mic2,
+  Send,
+  Volume2,
+  Clock
+} from 'lucide-react';
+
+/** * AFROKAVIAR SOCIAL WORKSPACE
+ * Integrated Open Space UI Redesign
+ */
+
+interface Comment {
+  id: string;
+  user: string;
+  text: string;
+  time: string;
+}
+
+interface SocialPost {
+  id: string;
+  author: string;
+  handle: string;
+  avatar: string;
+  content: string;
+  image?: string;
+  audioTrack?: {
+    title: string;
+    duration: string;
+  };
+  likes: number;
+  comments: Comment[];
+  isLiked: boolean;
+}
+
+const App: React.FC = () => {
+  const [activeNav, setActiveNav] = useState('Social');
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
+  const posts: SocialPost[] = [
+    {
+      id: 'post-1',
+      author: 'Ajayi Studio',
+      handle: '@ajayi',
+      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Ajayi',
+      content: "Just finished the master for the new Afro-beat project. The low end on this one is absolutely massive. What do you guys think of the transition at 1:45?",
+      image: 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?auto=format&fit=crop&q=80&w=1200',
+      audioTrack: { title: "Afro-Fusion Master v4", duration: "3:45" },
+      likes: 124,
+      isLiked: true,
+      comments: [
+        { id: 'c1', user: 'nana', text: "That transition is silk! Did you use a high-pass filter there?", time: "2h ago" },
+        { id: 'c2', user: 'kofi_beats', text: "Energy is crazy on this one.", time: "1h ago" }
+      ]
+    },
+    {
+      id: 'post-2',
+      author: 'Nana Ama',
+      handle: '@nana',
+      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Nana',
+      content: "Session snippets from last night's live recording. The vocal booth energy was unmatched.",
+      audioTrack: { title: "Late Night Vocals (Raw)", duration: "2:15" },
+      likes: 89,
+      isLiked: false,
+      comments: []
+    }
+  ];
+
+  return (
+    <div className="flex h-screen bg-[#0a0a0b] text-zinc-100 font-sans selection:bg-[#F4BE44]/30 overflow-hidden">
+      
+      {/* LEFT SIDEBAR */}
+      <aside className="w-64 border-r border-zinc-800/50 flex flex-col hidden md:flex flex-shrink-0">
+        <div className="p-8">
+          <div className="flex items-center space-x-3 text-[#F4BE44]">
+            <div className="w-10 h-10 bg-[#F4BE44]/10 rounded-xl flex items-center justify-center">
+              <Mic2 className="w-6 h-6" />
+            </div>
+            <span className="font-black tracking-tighter text-xl text-white">AFROKAVIAR</span>
+          </div>
+        </div>
+
+        <nav className="flex-1 px-4 space-y-2">
+          <NavItem icon={Radio} label="Radio & TV" active={activeNav === 'Radio & TV'} onClick={setActiveNav} />
+          <NavItem icon={Tv} label="Live" active={activeNav === 'Live'} onClick={setActiveNav} />
+          <NavItem icon={Users} label="Social" active={activeNav === 'Social'} onClick={setActiveNav} />
+          <NavItem icon={Music} label="Music" active={activeNav === 'Music'} onClick={setActiveNav} />
+          <NavItem icon={Library} label="My Library" active={activeNav === 'My Library'} onClick={setActiveNav} />
+        </nav>
+
+        <div className="p-6 border-t border-zinc-800/50 space-y-4">
+          <div className="bg-gradient-to-br from-zinc-800 to-zinc-900 p-4 rounded-2xl border border-zinc-700/50">
+            <p className="text-xs font-bold text-zinc-400 mb-2 uppercase tracking-widest">Storage</p>
+            <div className="w-full h-1 bg-zinc-700 rounded-full overflow-hidden mb-2">
+              <div className="w-2/3 h-full bg-[#F4BE44]" />
+            </div>
+            <p className="text-[10px] text-zinc-500">2.4GB of 5GB Used</p>
+          </div>
+          <button className="flex items-center space-x-3 text-zinc-400 hover:text-white transition-colors w-full px-2 py-2">
+            <Settings className="w-5 h-5" />
+            <span className="text-sm font-bold">Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN WORKSPACE */}
+      <main className="flex-1 flex flex-col relative overflow-hidden">
+        <header className="h-20 flex items-center justify-between px-8 border-b border-zinc-800/30 bg-[#0a0a0b]/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
+          <div className="relative w-full max-w-xl group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-[#F4BE44] transition-colors" />
+            <input 
+              type="text" 
+              placeholder="Search across the Afroverse..." 
+              className="w-full bg-zinc-900/50 border border-zinc-800/80 rounded-full py-2.5 pl-12 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-[#F4BE44]/50 focus:bg-zinc-900 transition-all"
+            />
+          </div>
+          
+          <div className="flex items-center space-x-6">
+            <button className="relative text-zinc-400 hover:text-white transition-colors">
+              <Bell className="w-5 h-5" />
+              <span className="absolute -top-1 -right-1 w-2 h-2 bg-[#F4BE44] rounded-full border-2 border-[#0a0a0b]" />
+            </button>
+            <div className="flex items-center space-x-3 pl-4 border-l border-zinc-800">
+              <div className="text-right hidden sm:block">
+                <p className="text-xs font-black text-white">AJAYI STUDIO</p>
+                <p className="text-[10px] text-[#F4BE44] font-bold uppercase">Pro Account</p>
+              </div>
+              <div className="w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 overflow-hidden">
+                <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Ajayi" alt="User" />
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="max-w-4xl mx-auto py-10 px-6 space-y-12">
+            <div className="bg-[#121214] border border-zinc-800/80 rounded-[2rem] p-6 shadow-2xl">
+              <div className="flex space-x-4">
+                <div className="w-12 h-12 rounded-2xl bg-zinc-800 overflow-hidden shrink-0">
+                  <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Ajayi" alt="" />
+                </div>
+                <textarea 
+                  placeholder="Drop a track, share an idea..."
+                  className="flex-1 bg-transparent border-none resize-none focus:ring-0 text-lg placeholder:text-zinc-600 pt-2 h-24 outline-none"
+                />
+              </div>
+              <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800/50">
+                <div className="flex space-x-2">
+                  <PostActionButton icon={ImageIcon} label="Image" color="text-blue-400" />
+                  <PostActionButton icon={Play} label="Audio" color="text-[#F4BE44]" />
+                  <PostActionButton icon={Clock} label="Poll" color="text-purple-400" />
+                </div>
+                <button className="bg-[#F4BE44] hover:bg-[#ffcf66] text-black px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-[#F4BE44]/10">
+                  POST
+                </button>
+              </div>
+            </div>
+
+            {posts.map((post) => (
+              <article key={post.id} className="bg-[#121214] border border-zinc-800/60 rounded-[2.5rem] overflow-hidden shadow-2xl transition-all hover:border-zinc-700/50">
+                <div className="p-8">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 rounded-2xl bg-zinc-800 border border-zinc-700/50 overflow-hidden">
+                        <img src={post.avatar} alt="" />
+                      </div>
+                      <div>
+                        <h4 className="font-black text-white leading-tight">{post.author}</h4>
+                        <p className="text-xs font-bold text-zinc-500">{post.handle} • 2h ago</p>
+                      </div>
+                    </div>
+                    <button className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors">
+                      <MoreHorizontal className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <p className="text-zinc-200 text-lg leading-relaxed mb-6 font-medium">{post.content}</p>
+
+                  {post.image && (
+                    <div className="rounded-[2rem] overflow-hidden mb-6 border border-zinc-800 shadow-inner">
+                      <img src={post.image} className="w-full aspect-video object-cover" alt="" />
+                    </div>
+                  )}
+
+                  {post.audioTrack && (
+                    <div className="bg-black/40 rounded-3xl p-6 border border-zinc-800/50 flex items-center justify-between group">
+                      <div className="flex items-center space-x-5">
+                        <button 
+                          onClick={() => setPlayingId(playingId === post.id ? null : post.id)}
+                          className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-black shadow-xl hover:scale-105 active:scale-95 transition-all"
+                        >
+                          {playingId === post.id ? (
+                            <div className="flex space-x-0.5 items-end h-5">
+                              <div className="w-1 h-full bg-black animate-bounce" />
+                              <div className="w-1 h-3 bg-black animate-bounce [animation-delay:0.2s]" />
+                              <div className="w-1 h-4 bg-black animate-bounce [animation-delay:0.4s]" />
+                            </div>
+                          ) : (
+                            <Play className="w-6 h-6 fill-current" />
+                          )}
+                        </button>
+                        <div>
+                          <p className="font-black text-white text-base tracking-tight">{post.audioTrack.title}</p>
+                          <div className="flex items-center space-x-2 text-xs font-bold text-zinc-500">
+                            <span className="text-[#F4BE44]">WAV • 48kHz</span>
+                            <span className="w-1 h-1 rounded-full bg-zinc-800" />
+                            <span>{post.audioTrack.duration}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <Volume2 className="w-4 h-4 text-zinc-600" />
+                        <button className="p-3 bg-zinc-900 rounded-2xl text-zinc-400 hover:text-white transition-colors border border-zinc-800">
+                          <Plus className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between mt-8 pt-6 border-t border-zinc-800/30">
+                    <div className="flex space-x-6">
+                      <button className={`flex items-center space-x-2 font-bold text-sm transition-colors ${post.isLiked ? 'text-red-500' : 'text-zinc-500 hover:text-white'}`}>
+                        <Heart className={`w-5 h-5 ${post.isLiked ? 'fill-current' : ''}`} />
+                        <span>{post.likes}</span>
+                      </button>
+                      <button className="flex items-center space-x-2 text-zinc-500 hover:text-white font-bold text-sm transition-colors">
+                        <MessageCircle className="w-5 h-5" />
+                        <span>{post.comments.length}</span>
+                      </button>
+                      <button className="flex items-center space-x-2 text-zinc-500 hover:text-white font-bold text-sm transition-colors">
+                        <Share2 className="w-5 h-5" />
+                        <span>Share</span>
+                      </button>
+                    </div>
+                    <button className="p-2 text-zinc-600 hover:text-white transition-colors">
+                      <Library className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {post.comments.length > 0 && (
+                  <div className="bg-black/20 border-t border-zinc-800/40 p-8 space-y-6">
+                    <h5 className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-600 mb-4 tracking-widest">Threaded Comments</h5>
+                    {post.comments.map((comment) => (
+                      <div key={comment.id} className="flex space-x-4 group/comment">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-800 shrink-0" />
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-black text-zinc-300">{comment.user}</p>
+                            <span className="text-[10px] font-bold text-zinc-600">{comment.time}</span>
+                          </div>
+                          <p className="text-sm text-zinc-400 leading-relaxed font-medium">{comment.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex items-center space-x-4 mt-8 pt-4 border-t border-zinc-800/20">
+                      <div className="w-8 h-8 rounded-lg bg-zinc-800 shrink-0" />
+                      <div className="flex-1 relative">
+                        <input type="text" placeholder="Write a reply..." className="w-full bg-zinc-900/40 border border-zinc-800 rounded-xl py-2 px-4 text-xs focus:outline-none focus:ring-1 focus:ring-[#F4BE44]/30" />
+                        <button className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-[#F4BE44] transition-colors"><Send className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      </main>
+
+      {/* RIGHT SIDEBAR (DISCOVERY) */}
+      <aside className="w-80 border-l border-zinc-800/50 bg-[#0d0d0f] hidden xl:flex flex-col flex-shrink-0">
+        <div className="p-8">
+          <h2 className="text-xs font-black uppercase tracking-[0.3em] text-zinc-500 mb-8 tracking-widest">Discovery</h2>
+          <div className="space-y-8">
+            <section>
+              <h3 className="text-sm font-black text-white mb-4 flex items-center justify-between">
+                <span>Trending Radio</span>
+                <span className="text-[10px] text-[#F4BE44] uppercase tracking-widest cursor-pointer hover:underline">See All</span>
+              </h3>
+              <div className="space-y-3">
+                <MiniStationCard name="Lagos Beats" genre="Afro-House" listeners="4.2k" />
+                <MiniStationCard name="Nairobi Soul" genre="Acoustic" listeners="1.8k" />
+              </div>
+            </section>
+            <section>
+              <h3 className="text-sm font-black text-white mb-4">In Production</h3>
+              <div className="bg-zinc-900/40 rounded-2xl border border-zinc-800 p-4 space-y-4">
+                <p className="text-xs text-zinc-400 font-medium leading-relaxed">
+                  Join 12 collaborators working on <span className="text-white font-bold">"Summer Solstice"</span> remix.
+                </p>
+                <div className="flex -space-x-2">
+                  {[1,2,3].map(i => (
+                    <div key={i} className="w-7 h-7 rounded-full bg-zinc-700 border-2 border-[#0d0d0f]" />
+                  ))}
+                  <div className="w-7 h-7 rounded-full bg-[#F4BE44] border-2 border-[#0d0d0f] flex items-center justify-center text-[10px] font-black text-black">+8</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 10px; }
+      `}} />
+    </div>
+  );
+};
+
+const NavItem = ({ icon: Icon, label, active, onClick }: any) => (
+  <button onClick={() => onClick(label)} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all ${active ? 'bg-[#F4BE44]/10 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30'}`}>
+    <Icon className={`w-5 h-5 ${active ? 'text-[#F4BE44]' : ''}`} />
+    <span className="text-sm font-black tracking-tight">{label}</span>
+  </button>
+);
+
+const PostActionButton = ({ icon: Icon, label, color }: any) => (
+  <button className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors ${color}`}>
+    <Icon className="w-4 h-4" />
+    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{label}</span>
+  </button>
+);
+
+const MiniStationCard = ({ name, genre, listeners }: any) => (
+  <div className="flex items-center justify-between group cursor-pointer p-1">
+    <div className="flex items-center space-x-3">
+      <div className="w-10 h-10 bg-zinc-800 rounded-xl flex items-center justify-center group-hover:bg-zinc-700">
+        <Radio className="w-4 h-4 text-zinc-500 group-hover:text-[#F4BE44]" />
+      </div>
+      <div>
+        <p className="text-xs font-black text-white">{name}</p>
+        <p className="text-[10px] font-bold text-zinc-600">{genre}</p>
+      </div>
+    </div>
+    <div className="text-right">
+      <p className="text-[10px] font-black text-zinc-400">{listeners}</p>
+    </div>
+  </div>
+);
+
+export default App;

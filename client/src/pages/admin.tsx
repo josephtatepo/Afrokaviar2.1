@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X, Upload, Star, Image, Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
+import { useUpload } from "@/hooks/use-upload";
 
 const ADMIN_ROOT_EMAIL = "josephtatepo@gmail.com";
 
@@ -33,7 +34,7 @@ export default function AdminStudio() {
   const queryClient = useQueryClient();
   
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("user");
+  const [inviteRole, setInviteRole] = useState("admin");
   
   // Promotion dialog state
   const [promoteTrack, setPromoteTrack] = useState<SocialTrack | null>(null);
@@ -42,8 +43,25 @@ export default function AdminStudio() {
   const [promoteAlbum, setPromoteAlbum] = useState("");
   const [promoteGenre, setPromoteGenre] = useState("");
 
+  // Featured song state
+  const [featTitle, setFeatTitle] = useState("");
+  const [featArtist, setFeatArtist] = useState("");
+  const [featAlbum, setFeatAlbum] = useState("");
+  const [featGenre, setFeatGenre] = useState("");
+  const [featPrice, setFeatPrice] = useState("1.00");
+  const [featAudioPath, setFeatAudioPath] = useState("");
+  const [featAudioName, setFeatAudioName] = useState("");
+  const [featArtworkPath, setFeatArtworkPath] = useState("");
+  const [featArtworkName, setFeatArtworkName] = useState("");
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [isUploadingArtwork, setIsUploadingArtwork] = useState(false);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const artworkInputRef = useRef<HTMLInputElement>(null);
+  const { uploadFile } = useUpload();
+
   const userEmail = user?.email ?? "";
-  const isAdmin = userEmail === ADMIN_ROOT_EMAIL;
+  const isAdmin = !!user?.adminRole;
+  const isRootAdmin = user?.adminRole === "root_admin";
 
   const { data: analytics } = useQuery<{ uploads: number; purchases: number; promoted: number; libraryItems: number; registeredUsers: number }>({
     queryKey: ["/api/admin/analytics"],
@@ -120,29 +138,125 @@ export default function AdminStudio() {
     });
   };
 
-  const inviteMutation = useMutation({
+  const { data: currentFeatured } = useQuery<{ song?: { id: string; title: string; artist: string; artworkUrl: string | null; audioUrl: string; genre: string | null } }>({
+    queryKey: ["/api/featured/homepage_hero"],
+    enabled: isAdmin,
+  });
+
+  const handleAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingAudio(true);
+    try {
+      const result = await uploadFile(file);
+      if (result) {
+        setFeatAudioPath(result.objectPath);
+        setFeatAudioName(file.name);
+        if (!featTitle) {
+          setFeatTitle(file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " "));
+        }
+        toast({ title: "Audio uploaded", description: file.name });
+      }
+    } catch {
+      toast({ title: "Upload failed", variant: "destructive" });
+    } finally {
+      setIsUploadingAudio(false);
+      if (audioInputRef.current) audioInputRef.current.value = "";
+    }
+  };
+
+  const handleArtworkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingArtwork(true);
+    try {
+      const result = await uploadFile(file);
+      if (result) {
+        setFeatArtworkPath(result.objectPath);
+        setFeatArtworkName(file.name);
+        toast({ title: "Artwork uploaded", description: file.name });
+      }
+    } catch {
+      toast({ title: "Upload failed", variant: "destructive" });
+    } finally {
+      setIsUploadingArtwork(false);
+      if (artworkInputRef.current) artworkInputRef.current.value = "";
+    }
+  };
+
+  const publishFeaturedMutation = useMutation({
+    mutationFn: async () => {
+      const songRes = await fetch("/api/songs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: featTitle,
+          artist: featArtist,
+          album: featAlbum || null,
+          genre: featGenre || null,
+          audioUrl: featAudioPath,
+          artworkUrl: featArtworkPath || null,
+          price: Math.round(parseFloat(featPrice) * 100),
+        }),
+      });
+      if (!songRes.ok) {
+        const err = await songRes.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to create song");
+      }
+      const song = await songRes.json();
+
+      const featRes = await fetch("/api/admin/featured", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contentType: "song",
+          contentId: song.id,
+          songId: song.id,
+          position: "homepage_hero",
+        }),
+      });
+      if (!featRes.ok) throw new Error("Failed to set featured song");
+      return featRes.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/featured/homepage_hero"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/songs"] });
+      setFeatTitle("");
+      setFeatArtist("");
+      setFeatAlbum("");
+      setFeatGenre("");
+      setFeatPrice("1.00");
+      setFeatAudioPath("");
+      setFeatAudioName("");
+      setFeatArtworkPath("");
+      setFeatArtworkName("");
+      toast({ title: "Featured song published!", description: "It's now live on the homepage." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const addAdminMutation = useMutation({
     mutationFn: async ({ email, role }: { email: string; role: string }) => {
-      const res = await fetch("/api/invites", {
+      const res = await fetch("/api/admin/add-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, role }),
       });
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.message || "Failed to create invite");
+        throw new Error(data.message || "Failed to add admin");
       }
       return res.json();
     },
     onSuccess: (data) => {
-      const inviteLink = `${window.location.origin}/auth?invite=${data.inviteCode}`;
-      navigator.clipboard.writeText(inviteLink);
       toast({ 
-        title: "Invite created!", 
-        description: `Link copied to clipboard. Share it with ${inviteEmail}` 
+        title: "Admin added!", 
+        description: data.message 
       });
       setInviteEmail("");
-      setInviteRole("user");
-      queryClient.invalidateQueries({ queryKey: ["/api/me/invites"] });
+      setInviteRole("admin");
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -320,10 +434,10 @@ export default function AdminStudio() {
             </div>
 
             <div className="mt-4 grid gap-4">
-              <div className="rounded-2xl border border-white/10 bg-black/30 p-4" data-testid="card-control-invite">
+              {isRootAdmin && <div className="rounded-2xl border border-white/10 bg-black/30 p-4" data-testid="card-control-add-admin">
                 <div className="flex items-center gap-2 text-xs tracking-[0.18em] text-white/45 mb-3">
                   <UserPlus className="h-4 w-4" />
-                  Invite User
+                  Add Admin
                 </div>
                 <div className="space-y-3">
                   <div>
@@ -334,32 +448,32 @@ export default function AdminStudio() {
                       onChange={(e) => setInviteEmail(e.target.value)}
                       placeholder="user@example.com"
                       className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
-                      data-testid="input-invite-email"
+                      data-testid="input-add-admin-email"
                     />
                   </div>
                   <div>
                     <Label className="text-xs text-white/60">Role</Label>
                     <Select value={inviteRole} onValueChange={setInviteRole}>
-                      <SelectTrigger className="mt-1 h-10 bg-black/30 border-white/10 text-white" data-testid="select-invite-role">
+                      <SelectTrigger className="mt-1 h-10 bg-black/30 border-white/10 text-white" data-testid="select-add-admin-role">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="user">User</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
+                        <SelectItem value="root_admin">Root Admin</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <Button
                     className="w-full bg-accent text-accent-foreground"
-                    disabled={!inviteEmail || inviteMutation.isPending}
-                    onClick={() => inviteMutation.mutate({ email: inviteEmail, role: inviteRole })}
-                    data-testid="button-send-invite"
+                    disabled={!inviteEmail || addAdminMutation.isPending}
+                    onClick={() => addAdminMutation.mutate({ email: inviteEmail, role: inviteRole })}
+                    data-testid="button-add-admin"
                   >
-                    <Mail className="mr-2 h-4 w-4" />
-                    Create Invite Link
+                    <UserPlus className="mr-2 h-4 w-4" />
+                    {addAdminMutation.isPending ? "Adding..." : "Add Admin"}
                   </Button>
                 </div>
-              </div>
+              </div>}
 
               <div className="rounded-2xl border border-white/10 bg-black/30 p-4" data-testid="card-control-perms">
                 <div className="text-xs tracking-[0.18em] text-white/45" data-testid="text-control-perms-label">
@@ -370,13 +484,148 @@ export default function AdminStudio() {
                 </div>
               </div>
 
-              <Button
-                className="bg-primary text-primary-foreground"
-                data-testid="button-feature-home"
-                onClick={() => toast({ title: "Coming soon", description: "Feature homepage content selection coming soon." })}
-              >
-                Feature on homepage
-              </Button>
+            </div>
+          </Card>
+
+          <Card className="rounded-2xl border border-[#F4BE44]/20 bg-white/5 p-5 text-white/80 backdrop-blur-md lg:col-span-3" data-testid="panel-featured-song">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <Star className="h-5 w-5 text-[#F4BE44]" />
+                <div className="font-display text-xl text-white" data-testid="text-featured-panel-title">
+                  Featured Song
+                </div>
+              </div>
+              {currentFeatured?.song && (
+                <Badge className="border border-[#F4BE44]/30 bg-[#F4BE44]/10 text-[#F4BE44]" data-testid="badge-current-featured">
+                  Live: {currentFeatured.song.title} — {currentFeatured.song.artist}
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm text-white/50 mb-5">Upload a song and set it as the featured track on the homepage.</p>
+
+            <div className="grid gap-5 lg:grid-cols-[1fr_1fr_auto]">
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-xs text-white/60">Audio File *</Label>
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/flac,.mp3,.m4a,.wav,.flac"
+                    className="hidden"
+                    onChange={handleAudioUpload}
+                    data-testid="input-feat-audio-file"
+                  />
+                  <Button
+                    variant="secondary"
+                    className="w-full mt-1 bg-black/30 border border-white/10 text-white hover:bg-white/10 justify-start gap-2"
+                    onClick={() => audioInputRef.current?.click()}
+                    disabled={isUploadingAudio}
+                    data-testid="button-feat-upload-audio"
+                  >
+                    {isUploadingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {featAudioName || "Choose audio file..."}
+                  </Button>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/60">Cover Artwork</Label>
+                  <input
+                    ref={artworkInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    className="hidden"
+                    onChange={handleArtworkUpload}
+                    data-testid="input-feat-artwork-file"
+                  />
+                  <div className="flex gap-2 mt-1">
+                    <Button
+                      variant="secondary"
+                      className="flex-1 bg-black/30 border border-white/10 text-white hover:bg-white/10 justify-start gap-2"
+                      onClick={() => artworkInputRef.current?.click()}
+                      disabled={isUploadingArtwork}
+                      data-testid="button-feat-upload-artwork"
+                    >
+                      {isUploadingArtwork ? <Loader2 className="h-4 w-4 animate-spin" /> : <Image className="h-4 w-4" />}
+                      {featArtworkName || "Choose artwork..."}
+                    </Button>
+                    {featArtworkPath && (
+                      <div className="w-10 h-10 rounded-lg border border-white/10 overflow-hidden shrink-0">
+                        <img src={featArtworkPath} alt="artwork" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-white/60">Title *</Label>
+                    <Input
+                      value={featTitle}
+                      onChange={(e) => setFeatTitle(e.target.value)}
+                      placeholder="Song title"
+                      className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                      data-testid="input-feat-title"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-white/60">Artist *</Label>
+                    <Input
+                      value={featArtist}
+                      onChange={(e) => setFeatArtist(e.target.value)}
+                      placeholder="Artist name"
+                      className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                      data-testid="input-feat-artist"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs text-white/60">Album</Label>
+                    <Input
+                      value={featAlbum}
+                      onChange={(e) => setFeatAlbum(e.target.value)}
+                      placeholder="Optional"
+                      className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                      data-testid="input-feat-album"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-white/60">Genre</Label>
+                    <Input
+                      value={featGenre}
+                      onChange={(e) => setFeatGenre(e.target.value)}
+                      placeholder="e.g. Afrobeats"
+                      className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                      data-testid="input-feat-genre"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-white/60">Price ($)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={featPrice}
+                      onChange={(e) => setFeatPrice(e.target.value)}
+                      className="mt-1 h-10 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                      data-testid="input-feat-price"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-end">
+                <Button
+                  className="bg-[#F4BE44] text-black hover:bg-[#F4BE44]/90 font-black uppercase text-xs tracking-widest px-6 h-10"
+                  disabled={!featTitle || !featArtist || !featAudioPath || publishFeaturedMutation.isPending}
+                  onClick={() => publishFeaturedMutation.mutate()}
+                  data-testid="button-publish-featured"
+                >
+                  {publishFeaturedMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Star className="h-4 w-4 mr-2" />}
+                  {publishFeaturedMutation.isPending ? "Publishing..." : "Publish Featured"}
+                </Button>
+              </div>
             </div>
           </Card>
         </motion.div>

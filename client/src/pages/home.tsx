@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import {
   MonitorPlay,
   Radio,
@@ -11,14 +12,44 @@ import {
   Sparkles,
   Loader2,
   Play,
+  Pause,
   Music,
 } from "lucide-react";
+
+type FeaturedSong = {
+  id: string;
+  title: string;
+  artist: string;
+  artworkUrl: string | null;
+  audioUrl: string;
+  genre: string | null;
+  price: number;
+};
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("live");
   const [isScrolled, setIsScrolled] = useState(false);
   const [isGeneratingAura, setIsGeneratingAura] = useState(false);
   const [auraDescription, setAuraDescription] = useState("");
+  const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  const { data: featuredData } = useQuery<{ song?: FeaturedSong }>({
+    queryKey: ["/api/featured/homepage_hero"],
+    retry: false,
+  });
+  const featuredSong = featuredData?.song;
+
+  const togglePlay = () => {
+    if (!audioRef.current || !featuredSong) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play();
+      setIsPlaying(true);
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
@@ -101,24 +132,69 @@ export default function Home() {
                 </span>
                 
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#22D3EE]/20 to-[#F4BE44]/20 flex items-center justify-center border border-white/10 group-hover:scale-105 transition-transform">
-                    <Play className="h-6 w-6 text-white fill-white" />
-                  </div>
+                  {featuredSong?.artworkUrl ? (
+                    <button
+                      onClick={togglePlay}
+                      className="w-16 h-16 rounded-xl overflow-hidden border border-white/10 group-hover:scale-105 transition-transform relative shrink-0 cursor-pointer"
+                      data-testid="button-featured-play"
+                    >
+                      <img src={featuredSong.artworkUrl} alt={featuredSong.title} className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        {isPlaying ? <Pause className="h-5 w-5 text-white fill-white" /> : <Play className="h-5 w-5 text-white fill-white" />}
+                      </div>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={togglePlay}
+                      className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#22D3EE]/20 to-[#F4BE44]/20 flex items-center justify-center border border-white/10 group-hover:scale-105 transition-transform shrink-0 cursor-pointer"
+                      data-testid="button-featured-play"
+                    >
+                      {isPlaying ? <Pause className="h-6 w-6 text-white fill-white" /> : <Play className="h-6 w-6 text-white fill-white" />}
+                    </button>
+                  )}
                   <div>
-                    <h4 className="text-lg font-bold text-white" data-testid="text-featured-song-title">Neon Kora</h4>
-                    <p className="text-sm text-zinc-400" data-testid="text-featured-song-artist">Afro Futura</p>
-                    <p className="text-xs text-zinc-500 mt-0.5">Electronic • 2026</p>
+                    <h4 className="text-lg font-bold text-white" data-testid="text-featured-song-title">
+                      {featuredSong?.title || "Coming Soon"}
+                    </h4>
+                    <p className="text-sm text-zinc-400" data-testid="text-featured-song-artist">
+                      {featuredSong?.artist || "Stay tuned"}
+                    </p>
+                    {featuredSong?.genre && (
+                      <p className="text-xs text-zinc-500 mt-0.5">{featuredSong.genre}</p>
+                    )}
                   </div>
                 </div>
                 
                 <div className="flex items-center gap-2">
-                  <Link href="/explore" data-testid="link-featured-song">
-                    <button className="bg-[#F4BE44] text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
-                      Listen Now
-                    </button>
-                  </Link>
-                  <span className="text-xs text-zinc-500">$1</span>
+                  {featuredSong ? (
+                    <>
+                      <button
+                        onClick={togglePlay}
+                        className="bg-[#F4BE44] text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all"
+                        data-testid="button-featured-listen"
+                      >
+                        {isPlaying ? "Pause" : "Listen Now"}
+                      </button>
+                      <span className="text-xs text-zinc-500">${(featuredSong.price / 100).toFixed(0)}</span>
+                    </>
+                  ) : (
+                    <Link href="/explore" data-testid="link-featured-song">
+                      <button className="bg-[#F4BE44] text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
+                        Explore
+                      </button>
+                    </Link>
+                  )}
                 </div>
+
+                {featuredSong && (
+                  <audio
+                    ref={audioRef}
+                    src={featuredSong.audioUrl}
+                    onEnded={() => setIsPlaying(false)}
+                    onError={() => setIsPlaying(false)}
+                    preload="none"
+                  />
+                )}
               </div>
             </div>
           </div>

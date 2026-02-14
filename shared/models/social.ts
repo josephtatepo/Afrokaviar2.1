@@ -72,9 +72,53 @@ export const insertReportSchema = createInsertSchema(reports).omit({
   resolvedAt: true,
 });
 
+export const socialPosts = pgTable("social_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  textContent: text("text_content"),
+  imageUrl: text("image_url"),
+  audioUrl: text("audio_url"),
+  audioTitle: text("audio_title"),
+  audioDuration: integer("audio_duration"),
+  videoUrl: text("video_url"),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  likesCount: integer("likes_count").default(0).notNull(),
+  commentsCount: integer("comments_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("social_posts_author_idx").on(table.authorId),
+  index("social_posts_created_at_idx").on(table.createdAt),
+]);
+
+export const insertSocialPostSchema = createInsertSchema(socialPosts).omit({
+  id: true,
+  likesCount: true,
+  commentsCount: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const socialPostLikes = pgTable("social_post_likes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  postId: varchar("post_id").notNull().references(() => socialPosts.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("social_post_likes_user_post_idx").on(table.userId, table.postId),
+]);
+
+export const insertSocialPostLikeSchema = createInsertSchema(socialPostLikes).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type SocialTrack = typeof socialTracks.$inferSelect;
 export type InsertSocialTrack = z.infer<typeof insertSocialTrackSchema>;
 export type SocialTrackSave = typeof socialTrackSaves.$inferSelect;
 export type InsertSocialTrackSave = z.infer<typeof insertSocialTrackSaveSchema>;
 export type Report = typeof reports.$inferSelect;
 export type InsertReport = z.infer<typeof insertReportSchema>;
+export type SocialPost = typeof socialPosts.$inferSelect;
+export type InsertSocialPost = z.infer<typeof insertSocialPostSchema>;
+export type SocialPostLike = typeof socialPostLikes.$inferSelect;
+export type InsertSocialPostLike = z.infer<typeof insertSocialPostLikeSchema>;

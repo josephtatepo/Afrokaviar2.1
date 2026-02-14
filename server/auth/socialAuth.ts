@@ -47,7 +47,7 @@ export async function setupSocialAuth(app: Express) {
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        secure: true,
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         sameSite: "lax",
       },
@@ -70,10 +70,6 @@ export async function setupSocialAuth(app: Express) {
     }
   });
 
-  const baseUrl = process.env.NODE_ENV === "production" 
-    ? "https://afrokaviar.com" 
-    : `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER?.toLowerCase()}.repl.co`;
-
   // Google OAuth Strategy
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passport.use(
@@ -81,7 +77,8 @@ export async function setupSocialAuth(app: Express) {
         {
           clientID: process.env.GOOGLE_CLIENT_ID,
           clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-          callbackURL: `${baseUrl}/api/auth/google/callback`,
+          callbackURL: "/api/auth/google/callback",
+          proxy: true,
         },
         async (accessToken, refreshToken, profile, done) => {
           try {
@@ -115,7 +112,7 @@ export async function setupSocialAuth(app: Express) {
         {
           consumerKey: process.env.TWITTER_CONSUMER_KEY,
           consumerSecret: process.env.TWITTER_CONSUMER_SECRET,
-          callbackURL: `${baseUrl}/api/auth/twitter/callback`,
+          callbackURL: "/api/auth/twitter/callback",
           includeEmail: true,
         },
         async (token, tokenSecret, profile, done) => {
@@ -153,7 +150,7 @@ export async function setupSocialAuth(app: Express) {
           teamID: process.env.APPLE_TEAM_ID,
           keyID: process.env.APPLE_KEY_ID,
           privateKeyString: process.env.APPLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-          callbackURL: `${baseUrl}/api/auth/apple/callback`,
+          callbackURL: "/api/auth/apple/callback",
           scope: ["name", "email"],
         },
         async (accessToken: string, refreshToken: string, idToken: any, profile: any, done: any) => {
@@ -222,12 +219,16 @@ export function registerSocialAuthRoutes(app: Express) {
     });
   });
 
-  // Current user route
-  app.get("/api/auth/user", (req, res) => {
-    if (req.isAuthenticated() && req.user) {
-      res.json(req.user);
-    } else {
-      res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/auth/user", async (req, res) => {
+    if (!req.isAuthenticated() || !req.user) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const userId = req.user.id;
+      const admin = userId ? await storage.getAdminUser(userId) : null;
+      res.json({ ...req.user, adminRole: admin?.role || null });
+    } catch {
+      res.json({ ...req.user, adminRole: null });
     }
   });
 

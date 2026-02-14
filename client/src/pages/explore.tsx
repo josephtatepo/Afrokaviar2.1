@@ -6,10 +6,13 @@ import {
   Bell,
   CirclePlay,
   Clock,
+  Eye,
+  FileText,
   Globe,
   Headphones,
   Heart,
   Library,
+  MessageCircle,
   MonitorPlay,
   MoreHorizontal,
   Music,
@@ -20,20 +23,28 @@ import {
   Radio as RadioIcon,
   RotateCcw,
   Search,
+  Settings,
+  Share2,
   Shield,
   Signal,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   Tv,
   Upload,
   User,
+  Video,
   Volume2,
   VolumeX,
+  Image as ImageIcon,
+  Pause,
+  X,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
+import { useI18n } from "@/lib/i18n";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +66,7 @@ type TvChannel = {
   iptvUrl: string;
   isOnline?: boolean;
   lastChecked?: string;
+  validated?: boolean;
 };
 
 type Song = {
@@ -87,12 +99,58 @@ type SocialTrack = {
   updatedAt: string;
 };
 
+type SocialPost = {
+  id: string;
+  textContent: string | null;
+  imageUrl: string | null;
+  audioUrl: string | null;
+  audioTitle: string | null;
+  audioDuration: number | null;
+  videoUrl: string | null;
+  authorId: string;
+  likesCount: number;
+  commentsCount: number;
+  createdAt: string;
+  authorHandle: string;
+  authorName: string;
+  authorImage: string | null;
+};
+
 type LibraryItem = {
   id: string;
   title: string;
   artist?: string;
   kind: "upload" | "purchase" | "free";
+  contentType?: string;
+  objectPath?: string;
+  fileSize?: number;
 };
+
+type FileCategory = "audio" | "image" | "video" | "pdf" | "unknown";
+
+function getFileCategory(contentType?: string): FileCategory {
+  if (!contentType) return "unknown";
+  if (contentType.startsWith("audio/")) return "audio";
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+  if (contentType === "application/pdf") return "pdf";
+  return "unknown";
+}
+
+function FileCategoryIcon({ category, className }: { category: FileCategory; className?: string }) {
+  const cls = className || "w-5 h-5";
+  switch (category) {
+    case "audio": return <Music className={cls} />;
+    case "image": return <ImageIcon className={cls} />;
+    case "video": return <Video className={cls} />;
+    case "pdf": return <FileText className={cls} />;
+    default: return <Music className={cls} />;
+  }
+}
+
+const ACCEPTED_FILE_TYPES = ".mp3,.m4a,.wav,.flac,.jpg,.jpeg,.png,.webp,.mp4,.webm,.pdf";
+const ACCEPTED_AUDIO = ".mp3,.m4a,.wav,.flac";
+const ACCEPTED_NO_VIDEO = ".mp3,.m4a,.wav,.flac,.jpg,.jpeg,.png,.webp,.pdf";
 
 const ADMIN_ROOT_EMAIL = "josephtatepo@gmail.com";
 
@@ -123,7 +181,6 @@ async function fetchCsvText(url: string) {
 }
 
 function parseCsv(text: string): string[][] {
-  // Minimal CSV parser (handles quotes). Good enough for Sheets export.
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -285,6 +342,7 @@ async function loadTvChannelsFromApi(): Promise<TvChannel[]> {
       iptvUrl: ch.iptvUrl,
       isOnline: ch.isOnline ?? true,
       lastChecked: ch.lastChecked,
+      validated: ch.validated ?? false,
     }));
   } catch (error) {
     console.warn("Error fetching channels:", error);
@@ -311,17 +369,27 @@ function TabIcon({ name }: { name: string }) {
   }
 }
 
+const NAV_ITEMS = [
+  { id: 'radio-tv', label: 'Radio & TV', icon: MonitorPlay },
+  { id: 'live', label: 'Live', icon: RadioIcon },
+  { id: 'social', label: 'Social', icon: Globe },
+  { id: 'music', label: 'Music', icon: Music2 },
+  { id: 'library', label: 'My Library', icon: Library },
+] as const;
+
 export default function ExplorePage() {
   const [tab, setTab] = useState("radio-tv");
   const [query, setQuery] = useState("");
   const queryClient = useQueryClient();
+  const [socialView, setSocialView] = useState<"posts" | "tracks">("posts");
+  const [socialPlayingId, setSocialPlayingId] = useState<string | null>(null);
 
   // Auth
   const { user, isAuthenticated } = useAuth();
+  const { t, lang, toggleLang } = useI18n();
   
-  // Admin check based on root admin email
   const userEmail = user?.email ?? "member@afrokaviar.com";
-  const isAdmin = userEmail === ADMIN_ROOT_EMAIL;
+  const isAdmin = !!user?.adminRole;
   const role = isAdmin ? "admin" : "member";
 
   // TV
@@ -388,6 +456,24 @@ export default function ExplorePage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/me/favorites"] });
+    },
+  });
+
+  const toggleChannelValidationMutation = useMutation({
+    mutationFn: async ({ channelId, validated }: { channelId: string; validated: boolean }) => {
+      const res = await fetch(`/api/admin/channels/${channelId}/validate`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ validated }),
+      });
+      if (!res.ok) throw new Error("Failed to toggle validation");
+      return res.json();
+    },
+    onMutate: ({ channelId, validated }) => {
+      setTvChannels((prev) =>
+        prev.map((ch) => (ch.id === channelId ? { ...ch, validated } : ch))
+      );
     },
   });
 
@@ -460,6 +546,10 @@ export default function ExplorePage() {
     queryKey: ["/api/social-tracks"],
     enabled: tab === "social",
   });
+  const { data: socialPostsData = [], refetch: refetchSocialPosts } = useQuery<SocialPost[]>({
+    queryKey: ["/api/social-posts"],
+    enabled: tab === "social",
+  });
   const [socialSaved, setSocialSaved] = useState<Record<string, boolean>>({});
 
   // Fetch library uploads from API
@@ -468,7 +558,8 @@ export default function ExplorePage() {
     type: string;
     referenceId?: string | null;
     objectPath?: string | null;
-    metadata?: { title?: string; artist?: string } | null;
+    fileSize?: number | null;
+    metadata?: { title?: string; artist?: string; contentType?: string } | null;
     createdAt: string;
   };
   const { data: libraryUploadsData = [], refetch: refetchLibraryUploads } = useQuery<ApiLibraryItem[]>({
@@ -539,14 +630,16 @@ export default function ExplorePage() {
     enabled: tab === "library" && isAuthenticated,
   });
   const hasActiveSubscription = subscriptionData?.subscription?.status === "active";
-  const canUploadToLibrary = hasActiveSubscription || isAdmin; // Admins get free access
+  const canUploadToLibrary = true;
+  const canUploadVideo = hasActiveSubscription || isAdmin;
 
   // Storage stats query
-  const { data: storageData, refetch: refetchStorage } = useQuery<{ usedBytes: number; limitBytes: number }>({
+  const { data: storageData, refetch: refetchStorage } = useQuery<{ usedBytes: number; limitBytes: number; isAdmin: boolean }>({
     queryKey: ["/api/me/storage"],
     enabled: tab === "library" && isAuthenticated,
   });
-  const storagePercent = storageData ? Math.round((storageData.usedBytes / storageData.limitBytes) * 100) : 0;
+  const storagePercent = storageData ? Math.min(Math.round((storageData.usedBytes / storageData.limitBytes) * 100), 100) : 0;
+  const isStorageFull = storageData ? storageData.usedBytes >= storageData.limitBytes : false;
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -554,6 +647,15 @@ export default function ExplorePage() {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   };
+
+  // Music upload dialog states (admin only)
+  const [showMusicUploadDialog, setShowMusicUploadDialog] = useState(false);
+  const [musicUploadTitle, setMusicUploadTitle] = useState("");
+  const [musicUploadArtist, setMusicUploadArtist] = useState("");
+  const [musicUploadAlbum, setMusicUploadAlbum] = useState("");
+  const [musicUploadGenre, setMusicUploadGenre] = useState("");
+  const [musicUploadFile, setMusicUploadFile] = useState<File | null>(null);
+  const [isMusicUploading, setIsMusicUploading] = useState(false);
 
   // Upload dialog states
   const [showSocialUploadDialog, setShowSocialUploadDialog] = useState(false);
@@ -563,6 +665,17 @@ export default function ExplorePage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState<"all" | "purchases" | "uploads" | "free">("all");
+  const [viewingItem, setViewingItem] = useState<LibraryItem | null>(null);
+  const [postText, setPostText] = useState("");
+  const [postImageFile, setPostImageFile] = useState<File | null>(null);
+  const [postImagePreview, setPostImagePreview] = useState<string | null>(null);
+  const [postAudioFile, setPostAudioFile] = useState<File | null>(null);
+  const [postVideoFile, setPostVideoFile] = useState<File | null>(null);
+  const [isPostSubmitting, setIsPostSubmitting] = useState(false);
+  const [postLikes, setPostLikes] = useState<Record<string, boolean>>({});
+  const postImageInputRef = useRef<HTMLInputElement>(null);
+  const postAudioInputRef = useRef<HTMLInputElement>(null);
+  const postVideoInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
@@ -613,11 +726,13 @@ export default function ExplorePage() {
 
   const filteredTv = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const hasAnyValidated = tvChannels.some((c) => c.validated === true);
     return tvChannels
+      .filter((c) => isAdmin ? true : (!hasAnyValidated || c.validated === true))
       .filter((c) => (tvCountry === "all" ? true : c.country === tvCountry))
       .filter((c) => (tvGroup === "all" ? true : c.channelGroup === tvGroup))
       .filter((c) => (q ? c.name.toLowerCase().includes(q) : true));
-  }, [tvChannels, tvCountry, tvGroup, query]);
+  }, [tvChannels, tvCountry, tvGroup, query, isAdmin]);
 
   const activeChannel = useMemo(() => {
     return filteredTv.find((c) => c.id === playingChannelId) ?? null;
@@ -653,6 +768,19 @@ export default function ExplorePage() {
     );
   }, [socialTracksData, query]);
 
+  useEffect(() => {
+    if (!isAuthenticated || socialPostsData.length === 0) return;
+    const postIds = socialPostsData.map((p) => p.id).join(",");
+    fetch(`/api/social-posts/likes?postIds=${postIds}`, { credentials: "include" })
+      .then((res) => res.json())
+      .then((likedIds: string[]) => {
+        const likes: Record<string, boolean> = {};
+        likedIds.forEach((id) => { likes[id] = true; });
+        setPostLikes(likes);
+      })
+      .catch(() => {});
+  }, [socialPostsData, isAuthenticated]);
+
   // Merge purchased songs from entitlements with uploaded items from API
   const allLibraryItems = useMemo(() => {
     const purchasedItems: LibraryItem[] = entitlementsData
@@ -662,22 +790,25 @@ export default function ExplorePage() {
         title: ent.song!.title,
         artist: ent.song!.artist,
         kind: "purchase" as const,
+        contentType: "audio/mpeg",
       }));
     
-    // Convert API library uploads to LibraryItem format
     const uploadedItems: LibraryItem[] = libraryUploadsData.map(item => ({
       id: item.id,
       title: (item.metadata as any)?.title || "Untitled Upload",
       artist: (item.metadata as any)?.artist || "You",
       kind: "upload" as const,
+      contentType: (item.metadata as any)?.contentType || "",
+      objectPath: item.objectPath || undefined,
+      fileSize: item.fileSize || undefined,
     }));
 
-    // Convert free library items to LibraryItem format
     const freeItems: LibraryItem[] = libraryFreeData.map(item => ({
       id: item.id,
       title: (item.metadata as any)?.title || "Free Song",
       artist: (item.metadata as any)?.artist || "Unknown",
       kind: "free" as const,
+      contentType: "audio/mpeg",
     }));
     
     return [...purchasedItems, ...freeItems, ...uploadedItems];
@@ -697,155 +828,190 @@ export default function ExplorePage() {
   }, [allLibraryItems, libraryFilter, query]);
 
   function togglePlayMock(title: string) {
-    // Plays a tiny silent audio (just to simulate player controls) 
-    // Without backend uploads, we keep it simple.
     setNowPlaying(title);
     setIsPlaying((p) => !p);
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="absolute inset-0 -z-10 opacity-[0.14] [background-image:radial-gradient(900px_500px_at_20%_0%,rgba(34,211,238,.22),transparent),radial-gradient(900px_500px_at_80%_10%,rgba(245,158,11,.16),transparent)]" />
-      <div className="mx-auto w-full max-w-6xl px-6 py-6">
-        <header className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {user ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-[15px] tracking-[0.18em] cursor-default" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
-                    AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Cultural Operating System</p>
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <Link href="/" data-testid="link-explore-home">
-                <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
+    <div className="flex h-screen bg-background text-foreground overflow-hidden">
+      <aside className="w-64 border-r border-zinc-800/50 hidden md:flex flex-col flex-shrink-0 bg-[#0a0a0b]">
+        <div className="p-6 pb-4">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {user ? (
+                <span className="text-[15px] tracking-[0.18em] cursor-default block" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
                   AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
                 </span>
+              ) : (
+                <Link href="/" data-testid="link-explore-home">
+                  <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
+                    AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
+                  </span>
+                </Link>
+              )}
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Cultural Operating System</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        <nav className="flex-1 px-3 space-y-1 mt-4" data-testid="tabs-main">
+          {NAV_ITEMS.map((item) => {
+            const isActive = tab === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                data-testid={`tab-${item.id}`}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all duration-200 group relative ${
+                  isActive ? 'bg-[#F4BE44]/10 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30'
+                }`}
+              >
+                <Icon
+                  size={18}
+                  className={`transition-colors duration-200 ${isActive ? 'text-[#F4BE44]' : 'group-hover:text-zinc-300'}`}
+                />
+                <span className="text-sm font-bold tracking-tight">{item.label}</span>
+                {item.id === 'live' && isActive && (
+                  <span className="absolute top-2 right-3 flex h-1.5 w-1.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F4BE44] opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#F4BE44]"></span>
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="p-4 border-t border-zinc-800/50 space-y-3">
+          <Link href="/profile">
+            <button className="flex items-center space-x-3 text-zinc-400 hover:text-white transition-colors w-full px-3 py-2 rounded-xl hover:bg-zinc-800/30" data-testid="button-sidebar-settings">
+              <Settings className="w-5 h-5" />
+              <span className="text-sm font-bold">{t("common.settings")}</span>
+            </button>
+          </Link>
+          {user && (
+            <div className="flex items-center space-x-3 px-3 py-2">
+              {user.profileImageUrl ? (
+                <img src={user.profileImageUrl} alt="" className="w-8 h-8 rounded-full" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center">
+                  <User className="w-4 h-4 text-zinc-500" />
+                </div>
+              )}
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-white truncate">{user.firstName || user.handle || 'User'}</span>
+                <span className="text-[10px] text-zinc-500 truncate">{isAdmin ? 'Admin' : 'Member'}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      <div className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-[#0a0a0b]/95 backdrop-blur-xl border-t border-zinc-800/60">
+        <div className="flex items-center justify-around px-2 py-2">
+          {NAV_ITEMS.map((item) => {
+            const isActive = tab === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                data-testid={`tab-mobile-${item.id}`}
+                className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all ${
+                  isActive ? 'text-[#F4BE44]' : 'text-zinc-500'
+                }`}
+              >
+                <Icon size={20} />
+                <span className="text-[10px] font-bold mt-0.5">{item.label.replace(' & ', '/')}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/30 bg-[#0a0a0b]/80 backdrop-blur-md shrink-0">
+          <div className="md:hidden">
+            <span className="text-[13px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo-mobile">
+              AFRO<span className="text-[#22D3EE] mx-[5px]">•</span>KAVIAR
+            </span>
+          </div>
+          <div className="relative flex-1 max-w-xl mx-auto">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/45" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("search.placeholder")}
+              className="h-10 w-full pl-9 bg-zinc-900/50 border-zinc-800/80 text-white placeholder:text-white/35 rounded-full"
+              data-testid="input-global-search"
+            />
+          </div>
+          <div className="flex items-center gap-3 ml-4">
+            <button
+              onClick={toggleLang}
+              className="h-9 px-3 rounded-full text-xs font-bold bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
+              data-testid="button-lang-toggle"
+            >
+              {lang === "en" ? "FR" : "EN"}
+            </button>
+            {user ? (
+              <Link href="/profile" data-testid="link-profile">
+                <Button
+                  size="sm"
+                  className="h-9 px-4 bg-white/10 text-white hover:bg-white/20 border border-white/10"
+                  data-testid="button-profile"
+                >
+                  {user.profileImageUrl ? (
+                    <img 
+                      src={user.profileImageUrl} 
+                      alt="" 
+                      className="w-5 h-5 rounded-full mr-2"
+                    />
+                  ) : (
+                    <User className="mr-2 h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline">{t("common.profile")}</span>
+                </Button>
+              </Link>
+            ) : (
+              <Link href="/auth" data-testid="link-signin">
+                <Button
+                  size="sm"
+                  className="h-9 px-5 bg-cyan-500 text-black font-bold hover:bg-cyan-400"
+                  data-testid="button-signin"
+                >
+                  {t("common.sign_in")}
+                </Button>
               </Link>
             )}
-
-            <div className="flex items-center gap-3">
-              {user ? (
-                <Link href="/profile" data-testid="link-profile">
-                  <Button
-                    size="sm"
-                    className="h-9 px-4 bg-white/10 text-white hover:bg-white/20 border border-white/10"
-                    data-testid="button-profile"
-                  >
-                    {user.profileImageUrl ? (
-                      <img 
-                        src={user.profileImageUrl} 
-                        alt="" 
-                        className="w-5 h-5 rounded-full mr-2"
-                      />
-                    ) : (
-                      <User className="mr-2 h-4 w-4" />
-                    )}
-                    Profile
-                  </Button>
-                </Link>
-              ) : (
-                <Link href="/auth" data-testid="link-signin">
-                  <Button
-                    size="sm"
-                    className="h-9 px-5 bg-cyan-500 text-black font-bold hover:bg-cyan-400"
-                    data-testid="button-signin"
-                  >
-                    Sign in
-                  </Button>
-                </Link>
-              )}
-              {isAdmin && (
-                <Link href="/admin" data-testid="link-admin">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-9 px-3 text-[#22D3EE]/70 bg-[#22D3EE]/10 hover:text-white hover:bg-[#22D3EE]"
-                    data-testid="button-admin"
-                  >
-                    <Shield className="mr-2 h-4 w-4" />
-                    Admin
-                  </Button>
-                </Link>
-              )}
-            </div>
+            {isAdmin && (
+              <Link href="/admin" data-testid="link-admin">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 px-3 text-[#22D3EE]/70 bg-[#22D3EE]/10 hover:text-white hover:bg-[#22D3EE]"
+                  data-testid="button-admin"
+                >
+                  <Shield className="mr-2 h-4 w-4" />
+                  <span className="hidden sm:inline">{t("common.admin")}</span>
+                </Button>
+              </Link>
+            )}
           </div>
+        </header>
 
-          <div className="flex flex-col gap-3 rounded-2xl bg-white/5 p-4 backdrop-blur-md">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/45" />
-                  <Input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search in Music, Social, My Library..."
-                    className="h-10 w-[min(520px,80vw)] pl-9 bg-black/30 border-white/10 text-white placeholder:text-white/35"
-                    data-testid="input-global-search"
-                  />
-                </div>
-              </div>
-              <span className="text-xs text-white/45" data-testid="text-discovery">
-                Unified Discovery
-              </span>
-            </div>
-
+        <div className="flex-1 overflow-y-auto pb-20 md:pb-6">
+          <div className="mx-auto w-full max-w-6xl px-6 py-6">
             <Tabs value={tab} onValueChange={setTab}>
-              <nav className="w-full mb-0 select-none" data-testid="tabs-main">
-                <div className="bg-[#0d0d0f]/80 backdrop-blur-xl border border-zinc-800/60 rounded-3xl p-2 flex items-center justify-between">
-                  {[
-                    { id: 'radio-tv', label: 'Radio & TV', icon: MonitorPlay },
-                    { id: 'live', label: 'Live', icon: RadioIcon },
-                    { id: 'social', label: 'Social', icon: Globe },
-                    { id: 'music', label: 'Music', icon: Music2 },
-                    { id: 'library', label: 'My Library', icon: Library },
-                  ].map((item) => {
-                    const isActive = tab === item.id;
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => setTab(item.id)}
-                        data-testid={`tab-${item.id}`}
-                        className={`
-                          relative flex items-center sm:space-x-2.5 px-3 sm:px-4 py-2.5 rounded-2xl transition-all duration-300 group
-                          ${isActive ? 'bg-[#F4BE44]/10' : 'hover:bg-zinc-800/40'}
-                        `}
-                      >
-                        <Icon 
-                          size={18} 
-                          className={`
-                            transition-colors duration-300
-                            ${isActive ? 'text-[#F4BE44]' : 'text-zinc-500 group-hover:text-zinc-300'}
-                          `} 
-                        />
-                        <span className={`
-                          text-xs font-bold tracking-tight transition-colors duration-300
-                          ${isActive ? 'text-white' : 'text-zinc-500 group-hover:text-zinc-300'}
-                          hidden sm:inline-block
-                        `}>
-                          {item.label}
-                        </span>
-                        {item.id === 'live' && isActive && (
-                          <span className="absolute top-2 right-2 flex h-1.5 w-1.5">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F4BE44] opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#F4BE44]"></span>
-                          </span>
-                        )}
-                        {isActive && (
-                          <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1 bg-[#F4BE44] rounded-full shadow-[0_0_8px_#F4BE44]" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </nav>
+              <TabsList className="hidden">
+                {NAV_ITEMS.map((item) => (
+                  <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>
+                ))}
+              </TabsList>
 
-              <div className="pt-5">
                 <TabsContent value="radio-tv" className="mt-0">
                   <div className="grid gap-6 lg:grid-cols-5">
                     <div className="lg:col-span-3 text-white">
@@ -943,7 +1109,7 @@ export default function ExplorePage() {
                                   Choose a channel on the right.
                                 </div>
                                 <div className="text-xs text-white/45" data-testid="text-player-empty-sub">
-                                  We’ll validate streams as you play them.
+                                  We'll validate streams as you play them.
                                 </div>
                               </div>
                             </div>
@@ -953,9 +1119,7 @@ export default function ExplorePage() {
 
                       <div className="mt-4">
                         <div className="rounded-xl border border-white/10 p-3" data-testid="panel-radio">
-                          {/* Enhanced Radio Player */}
                           <div className="w-full select-none">
-                            {/* Label Header */}
                             <div className="flex items-center space-x-3 mb-5 px-2">
                               <div className="p-1.5 bg-[#F4BE44]/10 rounded-lg">
                                 <RadioIcon className="w-4 h-4 text-[#F4BE44]" />
@@ -965,20 +1129,13 @@ export default function ExplorePage() {
                               </h2>
                             </div>
                             
-                            {/* Main Player Pill */}
                             <div className="relative bg-[#0d0d0f] rounded-2xl border border-zinc-800/60 p-6 md:p-10 flex items-center overflow-hidden group transition-all duration-300 min-h-[163px]">
-                              
-                              {/* Radio Embed for actual audio - with padding for controls */}
                               <div 
                                 className="absolute top-6 bottom-2 left-[26px] right-[26px] overflow-hidden rounded-xl"
                                 style={{ zIndex: 1 }}
                                 dangerouslySetInnerHTML={{ __html: radioEmbedCode }}
                               />
-                              
-                              {/* Ambient background glow */}
                               <div className="absolute -top-16 -right-16 w-48 h-48 bg-[#F4BE44]/5 blur-[80px] pointer-events-none group-hover:bg-[#F4BE44]/10 transition-colors duration-1000" />
-                              
-                              {/* ON AIR indicator - positioned at top right */}
                               <div className="absolute top-6 right-4 z-10 flex items-center space-x-2">
                                 <span className="flex h-2 w-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.5)]" />
                                 <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">On Air</span>
@@ -994,8 +1151,7 @@ export default function ExplorePage() {
                               <textarea
                                 value={radioEmbedCode}
                                 onChange={(e) => setRadioEmbedCode(e.target.value)}
-                                className="min-h-[86px] w-full rounded-lg border border-white/10 bg-black/35 px-3 py-2 text-xs text-white/75 outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
-                                placeholder="<iframe ...></iframe>"
+                                className="rounded-md bg-black/30 p-2 text-xs text-white/80 border border-white/10 h-20"
                                 data-testid="textarea-radio-embed"
                               />
                             </div>
@@ -1088,15 +1244,35 @@ export default function ExplorePage() {
                                         {c.country} • {c.channelGroup}
                                       </div>
                                     </div>
-                                    <Badge
-                                      className={
-                                        "mt-0.5 border border-white/10 bg-black/30 text-white/70 " +
-                                        (active ? "" : "")
-                                      }
-                                      data-testid={`badge-tv-active-${c.id}`}
-                                    >
-                                      {active ? "Playing" : "Play"}
-                                    </Badge>
+                                    <div className="flex items-center gap-2">
+                                      {isAdmin && (
+                                        <span
+                                          role="button"
+                                          className="cursor-pointer"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            toggleChannelValidationMutation.mutate({ channelId: c.id, validated: !c.validated });
+                                          }}
+                                          data-testid={`button-tv-validate-${c.id}`}
+                                        >
+                                          <Heart
+                                            className={
+                                              "h-4 w-4 transition " +
+                                              (c.validated ? "fill-red-500 text-red-500" : "text-white/40 hover:text-red-400")
+                                            }
+                                          />
+                                        </span>
+                                      )}
+                                      <Badge
+                                        className={
+                                          "mt-0.5 border border-white/10 bg-black/30 text-white/70 " +
+                                          (active ? "" : "")
+                                        }
+                                        data-testid={`badge-tv-active-${c.id}`}
+                                      >
+                                        {active ? "Playing" : "Play"}
+                                      </Badge>
+                                    </div>
                                   </div>
                                 </button>
                               );
@@ -1112,7 +1288,6 @@ export default function ExplorePage() {
 
                 <TabsContent value="live" className="mt-0">
                   <div className="w-full text-zinc-100" data-testid="panel-live">
-                    {/* Header Section */}
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-live-title">
@@ -1133,7 +1308,6 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    {/* Coming Soon Banner */}
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden mb-6">
                       <div className="px-6 py-8 text-center">
                         <div className="inline-flex items-center justify-center w-16 h-16 bg-[#22D3EE]/10 rounded-full mb-4">
@@ -1146,7 +1320,6 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    {/* Stats Info */}
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
                         <span className="text-zinc-600">Total: 3 upcoming events</span>
@@ -1156,9 +1329,7 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    {/* Event Cards Container */}
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden">
-                      {/* List Header */}
                       <div className="grid grid-cols-[60px_1fr_100px_100px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
                         <div className="text-center">#</div>
                         <div>Event / Description</div>
@@ -1166,7 +1337,6 @@ export default function ExplorePage() {
                         <div className="text-right pr-2">Action</div>
                       </div>
 
-                      {/* List Rows */}
                       <div className="divide-y divide-zinc-800/40">
                         {[
                           { title: "Diaspora Lounge Session", date: "Coming Soon", desc: "A weekly curated live stream." },
@@ -1178,7 +1348,6 @@ export default function ExplorePage() {
                             className="group grid grid-cols-[60px_1fr_100px_100px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
                             data-testid={`row-live-${idx}`}
                           >
-                            {/* Index */}
                             <div className="flex justify-center">
                               <div className="relative w-9 h-9 flex items-center justify-center">
                                 <span className="text-zinc-500 font-bold font-mono text-sm">
@@ -1187,7 +1356,6 @@ export default function ExplorePage() {
                               </div>
                             </div>
 
-                            {/* Title & Description */}
                             <div className="flex items-center space-x-5 overflow-hidden">
                               <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all relative overflow-hidden" data-testid={`img-live-thumb-${idx}`}>
                                 <RadioIcon className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
@@ -1202,12 +1370,10 @@ export default function ExplorePage() {
                               </div>
                             </div>
 
-                            {/* Date Column */}
                             <div className="hidden sm:block px-2 text-sm text-zinc-500 group-hover:text-zinc-300" data-testid={`text-live-date-${idx}`}>
                               {e.date}
                             </div>
 
-                            {/* Action Button */}
                             <div className="flex items-center justify-end">
                               <button
                                 className="px-4 py-2 text-xs font-bold bg-zinc-800 text-white rounded-full hover:bg-zinc-700 transition-all border border-zinc-700"
@@ -1226,7 +1392,6 @@ export default function ExplorePage() {
 
                 <TabsContent value="music" className="mt-0">
                   <div className="w-full text-zinc-100" data-testid="panel-music">
-                    {/* Header Section */}
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-music-title">
@@ -1250,21 +1415,15 @@ export default function ExplorePage() {
                           <button 
                             className="flex items-center justify-center space-x-2 bg-white hover:bg-zinc-200 text-black px-6 py-2.5 rounded-full font-bold text-sm transition-all transform active:scale-95 whitespace-nowrap"
                             data-testid="button-music-add"
-                            onClick={() => {
-                              toast({
-                                title: "Coming soon",
-                                description: "File upload feature for music will be added soon.",
-                              });
-                            }}
+                            onClick={() => setShowMusicUploadDialog(true)}
                           >
                             <Upload className="w-4 h-4" />
-                            <span>Add Music</span>
+                            <span>Upload Song</span>
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Stats Info */}
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
                         <span className="text-zinc-600">Total: {filteredSongs.length} tracks</span>
@@ -1275,9 +1434,7 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    {/* Track List Container */}
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
-                      {/* List Header */}
                       <div className="grid grid-cols-[60px_1fr_80px_100px_140px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
                         <div className="text-center">#</div>
                         <div>Title / Artist</div>
@@ -1285,7 +1442,6 @@ export default function ExplorePage() {
                         <div className="hidden md:block px-2">Genre</div>
                         <div className="text-right pr-2">Actions</div>
                       </div>
-                      {/* List Rows */}
                       <div className="divide-y divide-zinc-800/40">
                         {songsLoading ? (
                           <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-music-loading">
@@ -1306,7 +1462,6 @@ export default function ExplorePage() {
                                 className="group grid grid-cols-[60px_1fr_80px_100px_140px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
                                 data-testid={`row-song-${s.id}`}
                               >
-                                {/* Play Button / Index Toggle */}
                                 <div className="flex justify-center">
                                   <div className="relative w-9 h-9 flex items-center justify-center">
                                     <span className="absolute text-zinc-500 group-hover:opacity-0 transition-opacity font-bold font-mono text-sm">
@@ -1322,7 +1477,6 @@ export default function ExplorePage() {
                                   </div>
                                 </div>
 
-                                {/* Title & Artist */}
                                 <div className="flex items-center space-x-5 overflow-hidden">
                                   <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all  relative overflow-hidden" data-testid={`img-song-thumb-${s.id}`}>
                                     {s.artworkUrl ? (
@@ -1359,17 +1513,14 @@ export default function ExplorePage() {
                                   </div>
                                 </div>
 
-                                {/* Duration Column */}
                                 <div className="hidden sm:block px-2 text-sm text-zinc-400 group-hover:text-zinc-200 font-mono tracking-tighter" data-testid={`text-song-duration-${s.id}`}>
                                   {formatDuration(s.duration)}
                                 </div>
 
-                                {/* Genre Column */}
                                 <div className="hidden md:block px-2 text-sm text-zinc-500 group-hover:text-zinc-300" data-testid={`text-song-genre-${s.id}`}>
                                   {s.genre ?? "—"}
                                 </div>
 
-                                {/* Action Buttons */}
                                 <div className="flex items-center space-x-2 justify-end pr-2">
                                   <button 
                                     className={`p-2.5 rounded-full transition-all hover:scale-110 ${reaction === "up" ? 'text-[#22D3EE]' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
@@ -1473,18 +1624,17 @@ export default function ExplorePage() {
 
                 <TabsContent value="social" className="mt-0">
                   <div className="w-full text-zinc-100" data-testid="panel-social">
-                    {/* Header Section */}
-                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-6">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-social-title">
-                          Social
+                          {t("social.title")}
                         </h1>
                         <p className="text-zinc-400 text-sm font-medium max-w-md leading-relaxed" data-testid="text-social-desc">
-                          A simple public drop space for collaborators. Discover new sounds and works in progress.
+                          {t("social.desc")}
                         </p>
                       </div>
                       <button 
-                        className="flex items-center justify-center space-x-2 bg-white hover:bg-zinc-200 text-black px-6 py-2.5 rounded-full font-bold text-sm transition-all transform active:scale-95 "
+                        className="flex items-center justify-center space-x-2 bg-white hover:bg-zinc-200 text-black px-6 py-2.5 rounded-full font-bold text-sm transition-all transform active:scale-95"
                         data-testid="button-social-upload"
                         onClick={() => {
                           if (!isAuthenticated) {
@@ -1498,16 +1648,40 @@ export default function ExplorePage() {
                         }}
                       >
                         <Upload className="w-4 h-4" />
-                        <span>Upload Track</span>
+                        <span>{t("social.upload_track")}</span>
                       </button>
                     </div>
 
-                    {/* My Submissions Section */}
+                    <div className="flex items-center gap-2 mb-6" data-testid="social-view-toggle">
+                      <button
+                        onClick={() => setSocialView("posts")}
+                        className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
+                          socialView === "posts"
+                            ? "bg-[#F4BE44] text-black"
+                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                        }`}
+                        data-testid="button-social-posts"
+                      >
+                        {t("social.posts")}
+                      </button>
+                      <button
+                        onClick={() => setSocialView("tracks")}
+                        className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
+                          socialView === "tracks"
+                            ? "bg-[#F4BE44] text-black"
+                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                        }`}
+                        data-testid="button-social-tracks"
+                      >
+                        {t("social.tracks")}
+                      </button>
+                    </div>
+
                     {isAuthenticated && mySubmissions.length > 0 && (
                       <div className="mb-6 bg-[#121214] rounded-2xl border border-zinc-800/60 p-4">
                         <div className="flex items-center gap-2 mb-3">
                           <Upload className="w-4 h-4 text-[#22D3EE]" />
-                          <span className="text-sm font-bold text-white">My Submissions</span>
+                          <span className="text-sm font-bold text-white">{t("social.my_submissions")}</span>
                         </div>
                         <div className="space-y-2">
                           {mySubmissions.map((sub) => (
@@ -1518,145 +1692,531 @@ export default function ExplorePage() {
                                   {new Date(sub.createdAt).toLocaleDateString()}
                                 </span>
                               </div>
-                              <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full ${
-                                sub.status === "approved" ? "bg-green-500/20 text-green-400" :
-                                sub.status === "rejected" ? "bg-red-500/20 text-red-400" :
-                                "bg-yellow-500/20 text-yellow-400"
-                              }`} data-testid={`badge-status-${sub.id}`}>
-                                {sub.status}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full ${
+                                  sub.status === "approved" ? "bg-green-500/20 text-green-400" :
+                                  sub.status === "rejected" ? "bg-red-500/20 text-red-400" :
+                                  "bg-yellow-500/20 text-yellow-400"
+                                }`} data-testid={`badge-status-${sub.id}`}>
+                                  {sub.status}
+                                </span>
+                                {sub.status === "pending" && (
+                                  <button
+                                    className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
+                                    data-testid={`button-cancel-submission-${sub.id}`}
+                                    onClick={async () => {
+                                      if (!confirm("Cancel this submission?")) return;
+                                      try {
+                                        const res = await fetch(`/api/social-tracks/${sub.id}`, { method: "DELETE", credentials: "include" });
+                                        if (!res.ok) throw new Error();
+                                        toast({ title: "Submission cancelled" });
+                                        refetchSocialTracks();
+                                      } catch {
+                                        toast({ title: "Failed to cancel", variant: "destructive" });
+                                      }
+                                    }}
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Stats Info */}
-                    <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
-                      <div className="flex items-center space-x-6">
-                        <span className="text-zinc-600">Total: {filteredSocial.length} tracks</span>
-                      </div>
-                      <div className="flex items-center space-x-2 text-zinc-600">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>Last Sync: Just now</span>
-                      </div>
-                    </div>
+                    {socialView === "posts" ? (
+                      <div className="max-w-3xl mx-auto space-y-8">
+                        {isAuthenticated && (
+                          <div className="bg-[#121214] border border-zinc-800/80 rounded-[2rem] p-6 shadow-2xl" data-testid="social-post-composer">
+                            <p className="text-xs text-zinc-500 font-medium mb-3 uppercase tracking-widest">{t("social.posts")} · {t("social.audio")} · {t("social.image")} · {t("social.video")}</p>
+                            <div className="flex space-x-4">
+                              <div className="w-12 h-12 rounded-2xl bg-zinc-800 overflow-hidden shrink-0 flex items-center justify-center">
+                                {user?.profileImageUrl ? (
+                                  <img src={user.profileImageUrl} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <User className="w-5 h-5 text-zinc-500" />
+                                )}
+                              </div>
+                              <div className="flex-1">
+                                <textarea 
+                                  placeholder={t("social.post_placeholder")}
+                                  className="w-full bg-transparent border-none resize-none focus:ring-0 text-lg placeholder:text-zinc-600 pt-2 h-24 outline-none"
+                                  value={postText}
+                                  onChange={(e) => setPostText(e.target.value)}
+                                  data-testid="input-social-post-text"
+                                />
+                                {postImagePreview && (
+                                  <div className="relative mt-2 rounded-xl overflow-hidden border border-zinc-800/50">
+                                    <img src={postImagePreview} alt="Preview" className="w-full max-h-64 object-cover" />
+                                    <button
+                                      className="absolute top-2 right-2 bg-black/70 text-white rounded-full p-1.5 hover:bg-black/90 transition-colors"
+                                      onClick={() => { setPostImageFile(null); setPostImagePreview(null); }}
+                                      data-testid="button-post-image-remove"
+                                    >
+                                      <Plus className="w-4 h-4 rotate-45" />
+                                    </button>
+                                  </div>
+                                )}
+                                {postAudioFile && (
+                                  <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-zinc-900 rounded-xl border border-zinc-800/50">
+                                    <Music className="w-4 h-4 text-[#F4BE44]" />
+                                    <span className="text-sm text-zinc-300 truncate flex-1">{postAudioFile.name}</span>
+                                    <button
+                                      className="text-zinc-500 hover:text-white transition-colors"
+                                      onClick={() => setPostAudioFile(null)}
+                                      data-testid="button-post-audio-remove"
+                                    >
+                                      <Plus className="w-4 h-4 rotate-45" />
+                                    </button>
+                                  </div>
+                                )}
+                                {postVideoFile && (
+                                  <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-zinc-900 rounded-xl border border-zinc-800/50">
+                                    <Video className="w-4 h-4 text-purple-400" />
+                                    <span className="text-sm text-zinc-300 truncate flex-1">{postVideoFile.name}</span>
+                                    <button
+                                      className="text-zinc-500 hover:text-white transition-colors"
+                                      onClick={() => setPostVideoFile(null)}
+                                      data-testid="button-post-video-remove"
+                                    >
+                                      <Plus className="w-4 h-4 rotate-45" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <input
+                              ref={postImageInputRef}
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  setPostImageFile(file);
+                                  setPostImagePreview(URL.createObjectURL(file));
+                                }
+                                e.target.value = "";
+                              }}
+                              data-testid="input-post-image-file"
+                            />
+                            <input
+                              ref={postAudioInputRef}
+                              type="file"
+                              accept="audio/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) setPostAudioFile(file);
+                                e.target.value = "";
+                              }}
+                              data-testid="input-post-audio-file"
+                            />
+                            <input
+                              ref={postVideoInputRef}
+                              type="file"
+                              accept="video/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) setPostVideoFile(file);
+                                e.target.value = "";
+                              }}
+                              data-testid="input-post-video-file"
+                            />
+                            <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800/50">
+                              <div className="flex space-x-2">
+                                <button
+                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-blue-400"
+                                  onClick={() => postImageInputRef.current?.click()}
+                                  data-testid="button-post-image"
+                                >
+                                  <ImageIcon className="w-4 h-4" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.image")}</span>
+                                </button>
+                                <button 
+                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-[#F4BE44]"
+                                  onClick={() => postAudioInputRef.current?.click()}
+                                  data-testid="button-post-audio"
+                                >
+                                  <Play className="w-4 h-4" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.audio")}</span>
+                                </button>
+                                <button 
+                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-purple-400"
+                                  onClick={() => postVideoInputRef.current?.click()}
+                                  data-testid="button-post-video"
+                                >
+                                  <Video className="w-4 h-4" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.video")}</span>
+                                </button>
+                              </div>
+                              <button 
+                                className="bg-[#F4BE44] hover:bg-[#ffcf66] text-black px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-[#F4BE44]/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                data-testid="button-post-submit"
+                                disabled={isPostSubmitting || (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile)}
+                                onClick={async () => {
+                                  if (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile) return;
+                                  setIsPostSubmitting(true);
+                                  try {
+                                    let imageUrl: string | null = null;
+                                    let audioUrl: string | null = null;
+                                    let audioTitle: string | null = null;
+                                    let audioDuration: number | null = null;
 
-                    {/* Track List Container */}
-                    <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
-                      {/* List Header */}
-                      <div className="grid grid-cols-[60px_1fr_100px_120px_120px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
-                        <div className="text-center">#</div>
-                        <div>Title / Artist</div>
-                        <div className="hidden sm:block px-4">Time</div>
-                        <div className="hidden md:block px-4">Posted</div>
-                        <div className="text-right pr-6">Actions</div>
-                      </div>
+                                    if (postImageFile) {
+                                      const urlRes = await fetch("/api/uploads/request-url", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        credentials: "include",
+                                        body: JSON.stringify({ name: postImageFile.name, size: postImageFile.size, contentType: postImageFile.type }),
+                                      });
+                                      const urlData = await urlRes.json();
+                                      await fetch(urlData.uploadURL, { method: "PUT", body: postImageFile });
+                                      imageUrl = urlData.objectPath;
+                                    }
 
-                      {/* List Rows */}
-                      <div className="divide-y divide-zinc-800/40">
-                        {filteredSocial.map((t, index) => {
-                          const saved = !!socialSaved[t.id];
+                                    if (postAudioFile) {
+                                      const urlRes = await fetch("/api/uploads/request-url", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        credentials: "include",
+                                        body: JSON.stringify({ name: postAudioFile.name, size: postAudioFile.size, contentType: postAudioFile.type }),
+                                      });
+                                      const urlData = await urlRes.json();
+                                      await fetch(urlData.uploadURL, { method: "PUT", body: postAudioFile });
+                                      audioUrl = urlData.objectPath;
+                                      audioTitle = postAudioFile.name.replace(/\.[^/.]+$/, "");
+                                    }
+
+                                    let videoUrl: string | null = null;
+                                    if (postVideoFile) {
+                                      const urlRes = await fetch("/api/uploads/request-url", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        credentials: "include",
+                                        body: JSON.stringify({ name: postVideoFile.name, size: postVideoFile.size, contentType: postVideoFile.type }),
+                                      });
+                                      const urlData = await urlRes.json();
+                                      await fetch(urlData.uploadURL, { method: "PUT", body: postVideoFile });
+                                      videoUrl = urlData.objectPath;
+                                    }
+
+                                    const res = await fetch("/api/social-posts", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      credentials: "include",
+                                      body: JSON.stringify({ textContent: postText.trim() || null, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl }),
+                                    });
+                                    if (!res.ok) throw new Error("Failed to create post");
+
+                                    setPostText("");
+                                    setPostImageFile(null);
+                                    setPostImagePreview(null);
+                                    setPostAudioFile(null);
+                                    setPostVideoFile(null);
+                                    refetchSocialPosts();
+                                    toast({ title: "Posted!", description: "Your post is now live." });
+                                  } catch (err) {
+                                    toast({ title: "Error", description: "Failed to create post. Please try again.", variant: "destructive" });
+                                  } finally {
+                                    setIsPostSubmitting(false);
+                                  }
+                                }}
+                              >
+                                {isPostSubmitting ? t("social.posting") : t("social.post_btn")}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
+                          <span className="text-zinc-600">Total: {socialPostsData.length} posts</span>
+                          <div className="flex items-center space-x-2 text-zinc-600">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Last Sync: Just now</span>
+                          </div>
+                        </div>
+
+                        {socialPostsData.map((post) => {
+                          const liked = !!postLikes[post.id];
+                          const isSocialPlaying = socialPlayingId === post.id;
                           return (
-                            <div 
-                              key={t.id}
-                              className="group grid grid-cols-[60px_1fr_100px_120px_120px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
-                              data-testid={`card-social-${t.id}`}
-                            >
-                              {/* Play Button / Index Toggle */}
-                              <div className="flex justify-center">
-                                <div className="relative w-9 h-9 flex items-center justify-center">
-                                  <span className="absolute text-zinc-500 group-hover:opacity-0 transition-opacity font-bold font-mono text-sm">
-                                    {String(index + 1).padStart(2, '0')}
-                                  </span>
-                                  <button 
-                                    className="absolute opacity-0 group-hover:opacity-100 bg-[#22D3EE] rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-[#06B6D4]"
-                                    onClick={() => togglePlayMock(t.title)}
-                                    data-testid={`button-social-play-${t.id}`}
-                                  >
-                                    <Play className="w-4 h-4 fill-current ml-0.5" />
-                                  </button>
+                            <article key={post.id} className="bg-[#121214] border border-zinc-800/60 rounded-[2.5rem] overflow-hidden shadow-2xl transition-all hover:border-zinc-700/50" data-testid={`card-social-post-${post.id}`}>
+                              <div className="p-8">
+                                <div className="flex items-center justify-between mb-6">
+                                  <div className="flex items-center space-x-4">
+                                    <div className="w-12 h-12 rounded-2xl bg-zinc-800 border border-zinc-700/50 overflow-hidden flex items-center justify-center">
+                                      {post.authorImage ? (
+                                        <img src={post.authorImage} alt="" className="w-full h-full object-cover" />
+                                      ) : (
+                                        <User className="w-5 h-5 text-zinc-500" />
+                                      )}
+                                    </div>
+                                    <div>
+                                      <h4 className="font-black text-white leading-tight" data-testid={`text-post-author-${post.id}`}>
+                                        {post.authorName}
+                                      </h4>
+                                      <p className="text-xs font-bold text-zinc-500" data-testid={`text-post-meta-${post.id}`}>
+                                        @{post.authorHandle} · {formatAge(new Date(post.createdAt).getTime())}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {user && user.id === post.authorId && (
+                                    <button 
+                                      className="p-2 text-zinc-600 hover:text-red-400 transition-colors"
+                                      data-testid={`button-post-delete-${post.id}`}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        if (!confirm("Delete this post?")) return;
+                                        try {
+                                          const res = await fetch(`/api/social-posts/${post.id}`, { method: "DELETE", credentials: "include" });
+                                          if (!res.ok) throw new Error();
+                                          toast({ title: "Post deleted" });
+                                          refetchSocialPosts();
+                                        } catch {
+                                          toast({ title: "Failed to delete post", variant: "destructive" });
+                                        }
+                                      }}
+                                    >
+                                      <Trash2 className="w-5 h-5" />
+                                    </button>
+                                  )}
+                                </div>
+
+                                {post.textContent && (
+                                  <p className="text-zinc-200 text-lg leading-relaxed mb-6 font-medium" data-testid={`text-post-content-${post.id}`}>
+                                    {post.textContent}
+                                  </p>
+                                )}
+
+                                {post.imageUrl && (
+                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
+                                    <img src={post.imageUrl} alt="" className="w-full max-h-[500px] object-cover" data-testid={`img-post-image-${post.id}`} />
+                                  </div>
+                                )}
+
+                                {post.videoUrl && (
+                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
+                                    <video 
+                                      src={post.videoUrl} 
+                                      controls 
+                                      className="w-full max-h-[500px]"
+                                      data-testid={`video-post-${post.id}`}
+                                    />
+                                  </div>
+                                )}
+
+                                {post.audioUrl && (
+                                  <div className="bg-black/40 rounded-3xl p-6 border border-zinc-800/50 flex items-center justify-between group mb-6">
+                                    <div className="flex items-center space-x-5">
+                                      <button 
+                                        onClick={() => {
+                                          setSocialPlayingId(isSocialPlaying ? null : post.id);
+                                          if (!isSocialPlaying && audioRef.current) {
+                                            audioRef.current.src = post.audioUrl!;
+                                            audioRef.current.play();
+                                          } else if (audioRef.current) {
+                                            audioRef.current.pause();
+                                          }
+                                        }}
+                                        className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-black shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0"
+                                        data-testid={`button-post-play-${post.id}`}
+                                      >
+                                        {isSocialPlaying ? (
+                                          <div className="flex space-x-0.5 items-end h-5">
+                                            <div className="w-1 h-full bg-black animate-bounce" />
+                                            <div className="w-1 h-3 bg-black animate-bounce [animation-delay:0.2s]" />
+                                            <div className="w-1 h-4 bg-black animate-bounce [animation-delay:0.4s]" />
+                                          </div>
+                                        ) : (
+                                          <Play className="w-6 h-6 fill-current ml-0.5" />
+                                        )}
+                                      </button>
+                                      <div>
+                                        <p className="font-black text-white text-base tracking-tight">{post.audioTitle || "Audio"}</p>
+                                        <div className="flex items-center space-x-2 text-xs font-bold text-zinc-500">
+                                          <span className="text-[#F4BE44]">Audio</span>
+                                          {post.audioDuration && (
+                                            <>
+                                              <span className="w-1 h-1 rounded-full bg-zinc-800" />
+                                              <span>{formatDuration(post.audioDuration)}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center space-x-4">
+                                      <Volume2 className="w-4 h-4 text-zinc-600" />
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="flex items-center justify-between mt-2 pt-6 border-t border-zinc-800/30">
+                                  <div className="flex space-x-6">
+                                    <button 
+                                      className={`flex items-center space-x-2 font-bold text-sm transition-colors ${liked ? 'text-red-500' : 'text-zinc-500 hover:text-white'}`}
+                                      onClick={async () => {
+                                        if (!isAuthenticated) {
+                                          toast({ title: "Sign in required", description: "Please sign in to like posts.", variant: "destructive" });
+                                          return;
+                                        }
+                                        const wasLiked = liked;
+                                        setPostLikes((p) => ({ ...p, [post.id]: !wasLiked }));
+                                        try {
+                                          await fetch(`/api/social-posts/${post.id}/like`, {
+                                            method: wasLiked ? "DELETE" : "POST",
+                                            credentials: "include",
+                                          });
+                                          refetchSocialPosts();
+                                        } catch {
+                                          setPostLikes((p) => ({ ...p, [post.id]: wasLiked }));
+                                        }
+                                      }}
+                                      data-testid={`button-post-like-${post.id}`}
+                                    >
+                                      <Heart className={`w-5 h-5 ${liked ? 'fill-current' : ''}`} />
+                                      <span>{post.likesCount}</span>
+                                    </button>
+                                    <button className="flex items-center space-x-2 text-zinc-500 hover:text-white font-bold text-sm transition-colors" data-testid={`button-post-comment-${post.id}`}>
+                                      <MessageCircle className="w-5 h-5" />
+                                      <span>{post.commentsCount}</span>
+                                    </button>
+                                    <button 
+                                      className="flex items-center space-x-2 text-zinc-500 hover:text-white font-bold text-sm transition-colors"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(window.location.href);
+                                        toast({ title: "Link copied", description: "Post link copied to clipboard." });
+                                      }}
+                                      data-testid={`button-post-share-${post.id}`}
+                                    >
+                                      <Share2 className="w-5 h-5" />
+                                      <span>{t("social.share")}</span>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
+                            </article>
+                          );
+                        })}
 
-                              {/* Title & Artist */}
-                              <div className="flex items-center space-x-5 overflow-hidden">
-                                <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all  relative overflow-hidden" data-testid={`img-social-thumb-${t.id}`}>
-                                  <Music className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
-                                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
-                                </div>
+                        {socialPostsData.length === 0 && (
+                          <div className="text-center py-16 text-zinc-500">
+                            <Globe className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
+                            <p className="text-sm font-medium">{t("social.no_posts")}</p>
+                            <p className="text-xs text-zinc-600 mt-1">{t("social.be_first")}</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="max-w-3xl mx-auto space-y-4">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
+                          <span className="text-zinc-600">Total: {filteredSocial.length} tracks</span>
+                          <div className="flex items-center space-x-2 text-zinc-600">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Last Sync: Just now</span>
+                          </div>
+                        </div>
+
+                        {filteredSocial.map((t) => {
+                          const saved = !!socialSaved[t.id];
+                          const isSocialPlaying = socialPlayingId === t.id;
+                          return (
+                            <div key={t.id} className="bg-black/40 rounded-3xl p-5 border border-zinc-800/50 flex items-center justify-between group hover:border-zinc-700/50 transition-all" data-testid={`card-social-track-${t.id}`}>
+                              <div className="flex items-center space-x-5 flex-1 min-w-0">
+                                <button 
+                                  onClick={() => {
+                                    if (isSocialPlaying) {
+                                      setSocialPlayingId(null);
+                                      if (audioRef.current) audioRef.current.pause();
+                                    } else {
+                                      setSocialPlayingId(t.id);
+                                      if (audioRef.current) {
+                                        audioRef.current.src = t.audioUrl;
+                                        audioRef.current.play().catch(() => {});
+                                      }
+                                    }
+                                  }}
+                                  className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-black shadow-lg hover:scale-105 active:scale-95 transition-all flex-shrink-0"
+                                  data-testid={`button-social-track-play-${t.id}`}
+                                >
+                                  {isSocialPlaying ? (
+                                    <div className="flex space-x-0.5 items-end h-4">
+                                      <div className="w-1 h-full bg-black animate-bounce" />
+                                      <div className="w-1 h-2.5 bg-black animate-bounce [animation-delay:0.2s]" />
+                                      <div className="w-1 h-3 bg-black animate-bounce [animation-delay:0.4s]" />
+                                    </div>
+                                  ) : (
+                                    <Play className="w-5 h-5 fill-current ml-0.5" />
+                                  )}
+                                </button>
                                 <div className="flex flex-col min-w-0">
-                                  <span className="font-bold text-white text-base truncate group-hover:text-[#22D3EE]/90 transition-colors" data-testid={`text-social-title-${t.id}`}>
+                                  <span className="font-bold text-white text-base truncate" data-testid={`text-social-track-title-${t.id}`}>
                                     {t.title}
                                   </span>
-                                  <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-social-meta-${t.id}`}>
+                                  <span className="text-sm text-zinc-400 font-medium truncate">
                                     @{t.uploaderHandle || "user"}
                                   </span>
                                 </div>
                               </div>
-
-                              {/* Duration Column */}
-                              <div className="hidden sm:block px-4 text-sm text-zinc-400 group-hover:text-zinc-200 font-mono tracking-tighter">
-                                {t.duration ? `${Math.floor(t.duration / 60)}:${String(t.duration % 60).padStart(2, '0')}` : "—"}
-                              </div>
-
-                              {/* Timestamp Column */}
-                              <div className="hidden md:block px-4 text-sm text-zinc-500 group-hover:text-zinc-300">
-                                {formatAge(new Date(t.createdAt).getTime())}
-                              </div>
-
-                              {/* Action Buttons */}
-                              <div className="flex items-center space-x-2 justify-end pr-2">
+                              <div className="flex items-center space-x-4 ml-4 flex-shrink-0">
+                                <span className="text-sm text-zinc-500 font-mono">
+                                  {t.duration ? formatDuration(t.duration) : "—"}
+                                </span>
                                 <button 
-                                  className={`p-2.5 rounded-full transition-all hover:scale-110 ${saved ? 'text-[#22D3EE]' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
-                                  aria-label="Like track"
+                                  className={`p-2.5 rounded-full transition-all hover:scale-110 ${saved ? 'text-red-500' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
                                   onClick={() => setSocialSaved((p) => ({ ...p, [t.id]: !p[t.id] }))}
-                                  data-testid={`button-social-save-${t.id}`}
+                                  data-testid={`button-social-track-save-${t.id}`}
                                 >
                                   <Heart className={`w-4 h-4 ${saved ? 'fill-current' : ''}`} />
                                 </button>
-                                {role === "admin" && (
-                                  <button 
-                                    className="p-2.5 text-zinc-500 hover:text-white rounded-full hover:bg-zinc-800 transition-all hover:scale-110" 
-                                    aria-label="Add to catalogue"
-                                    onClick={() => {
-                                      toast({
-                                        title: "Coming soon",
-                                        description: "Social to catalogue promotion will be available soon.",
-                                      });
+                                {user && user.id === t.uploadedBy && (
+                                  <button
+                                    className="p-2.5 rounded-full text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-all hover:scale-110"
+                                    data-testid={`button-social-track-delete-${t.id}`}
+                                    onClick={async () => {
+                                      if (!confirm("Delete this track?")) return;
+                                      try {
+                                        const res = await fetch(`/api/social-tracks/${t.id}`, { method: "DELETE", credentials: "include" });
+                                        if (!res.ok) throw new Error();
+                                        toast({ title: "Track deleted" });
+                                        refetchSocialTracks();
+                                      } catch {
+                                        toast({ title: "Failed to delete track", variant: "destructive" });
+                                      }
                                     }}
-                                    data-testid={`button-social-promote-${t.id}`}
                                   >
-                                    <Plus className="w-4 h-4" />
+                                    <Trash2 className="w-4 h-4" />
                                   </button>
                                 )}
-                                <button 
-                                  className="p-2.5 text-zinc-500 hover:text-white rounded-full hover:bg-zinc-800 transition-all hidden md:block" 
-                                  aria-label="More options"
-                                  data-testid={`button-social-more-${t.id}`}
-                                >
-                                  <MoreHorizontal className="w-4 h-4" />
-                                </button>
                               </div>
                             </div>
                           );
                         })}
+
+                        {filteredSocial.length === 0 && (
+                          <div className="text-center py-16 text-zinc-500">
+                            <Music2 className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
+                            <p className="text-sm font-medium">{t("social.no_tracks")}</p>
+                          </div>
+                        )}
                       </div>
-                    </div>
+                    )}
 
                   </div>
                 </TabsContent>
 
                 <TabsContent value="library" className="mt-0">
                   <div className="w-full text-zinc-100" data-testid="panel-library">
-                    {/* Header Section */}
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-library-title">
-                          My Library
+                          {t("library.title")}
                         </h1>
                         <p className="text-zinc-400 text-sm font-medium max-w-md leading-relaxed" data-testid="text-library-desc">
-                          Your personal and private music collection. Purchases and uploads appear here.
+                          {t("library.desc")}
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -1673,11 +2233,11 @@ export default function ExplorePage() {
                         </Select>
                         <button 
                           className={`flex items-center justify-center space-x-2 px-6 py-2.5 rounded-full font-bold text-sm transition-all transform active:scale-95 ${
-                            canUploadToLibrary && isAuthenticated
+                            isAuthenticated && (!isStorageFull || isAdmin)
                               ? "bg-white hover:bg-zinc-200 text-black" 
                               : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
                           }`}
-                          disabled={!isAuthenticated || !canUploadToLibrary}
+                          disabled={!isAuthenticated || (isStorageFull && !isAdmin)}
                           data-testid="button-library-upload"
                           onClick={() => {
                             setUploadTitle("");
@@ -1686,31 +2246,29 @@ export default function ExplorePage() {
                           }}
                         >
                           <Upload className="w-4 h-4" />
-                          <span>Upload</span>
+                          <span>{t("library.upload")}</span>
                         </button>
-                        {!canUploadToLibrary && isAuthenticated && (
-                          <span className="text-xs text-zinc-500">Subscribe to upload</span>
+                        {isStorageFull && !isAdmin && isAuthenticated && (
+                          <span className="text-xs text-red-400">{t("library.storage_full")}</span>
                         )}
                       </div>
                     </div>
 
-                    {/* Stats Info */}
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
                         <span className="text-zinc-600">Total: {filteredLibrary.length} items</span>
                         {storageData && (
-                          <span className="text-zinc-600" data-testid="text-storage-used">
-                            Storage: {formatBytes(storageData.usedBytes)} / 50GB ({storagePercent}%)
+                          <span className={`${isStorageFull && !isAdmin ? 'text-red-400' : 'text-zinc-600'}`} data-testid="text-storage-used">
+                            Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'} ({isAdmin ? '∞' : <span className="text-[#F4BE44]">{storagePercent}%</span>})
                           </span>
                         )}
                       </div>
                       <div className="flex items-center space-x-2 text-zinc-600">
                         <Library className="w-3.5 h-3.5" />
-                        <span>Your Personal Collection</span>
+                        <span>{t("library.your_collection")}</span>
                       </div>
                     </div>
 
-                    {/* Now Playing Mini-player */}
                     <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-5 mb-6 " data-testid="panel-library-player">
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center space-x-4">
@@ -1719,27 +2277,35 @@ export default function ExplorePage() {
                           </div>
                           <div>
                             <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500" data-testid="text-library-nowplaying-label">
-                              Now Playing
+                              {t("library.now_playing")}
                             </div>
                             <div className="font-bold text-white text-lg" data-testid="text-library-nowplaying">
-                              {nowPlaying ?? "Nothing yet"}
+                              {nowPlaying ?? t("library.nothing_yet")}
                             </div>
                           </div>
                         </div>
                         <button
                           className={`p-3 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-[#22D3EE] text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
                           data-testid="button-library-toggleplay"
-                          onClick={() => togglePlayMock(nowPlaying ?? "Sample")}
+                          onClick={() => {
+                            if (audioRef.current) {
+                              if (isPlaying) {
+                                audioRef.current.pause();
+                                setIsPlaying(false);
+                              } else {
+                                audioRef.current.play().catch(() => {});
+                                setIsPlaying(true);
+                              }
+                            }
+                          }}
                         >
-                          <Play className={`w-5 h-5 ${isPlaying ? '' : ''}`} />
+                          {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                         </button>
                       </div>
                       <audio ref={audioRef} />
                     </div>
 
-                    {/* Track List Container */}
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
-                      {/* List Header */}
                       <div className="grid grid-cols-[60px_1fr_80px_100px_100px_100px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
                         <div className="text-center">#</div>
                         <div>Title / Artist</div>
@@ -1749,11 +2315,10 @@ export default function ExplorePage() {
                         <div className="text-right pr-6">Actions</div>
                       </div>
 
-                      {/* List Rows */}
                       <div className="divide-y divide-zinc-800/40">
                         {filteredLibrary.length === 0 ? (
                           <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-library-empty">
-                            No items in your library
+                            {t("library.no_items")}
                           </div>
                         ) : (
                           filteredLibrary.map((item, index) => (
@@ -1762,11 +2327,19 @@ export default function ExplorePage() {
                               className="group grid grid-cols-[60px_1fr_80px_100px_100px_100px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-pointer"
                               data-testid={`row-library-${item.id}`}
                               onClick={() => {
-                                setNowPlaying(item.title);
-                                setIsPlaying(true);
+                                const cat = getFileCategory(item.contentType);
+                                if (cat === "audio" || !item.objectPath) {
+                                  setNowPlaying(item.title);
+                                  setIsPlaying(true);
+                                  if (item.objectPath && audioRef.current) {
+                                    audioRef.current.src = item.objectPath;
+                                    audioRef.current.play().catch(() => {});
+                                  }
+                                } else {
+                                  setViewingItem(item);
+                                }
                               }}
                             >
-                              {/* Play Button / Index Toggle */}
                               <div className="flex justify-center">
                                 <div className="relative w-9 h-9 flex items-center justify-center">
                                   <span className="absolute text-zinc-500 group-hover:opacity-0 transition-opacity font-bold font-mono text-sm">
@@ -1778,6 +2351,10 @@ export default function ExplorePage() {
                                       e.stopPropagation();
                                       setNowPlaying(item.title);
                                       setIsPlaying(true);
+                                      if (audioRef.current && item.objectPath) {
+                                        audioRef.current.src = item.objectPath;
+                                        audioRef.current.play().catch(() => {});
+                                      }
                                     }}
                                     data-testid={`button-library-play-${item.id}`}
                                   >
@@ -1786,41 +2363,55 @@ export default function ExplorePage() {
                                 </div>
                               </div>
 
-                              {/* Title & Artist */}
                               <div className="flex items-center space-x-5 overflow-hidden">
                                 <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all  relative overflow-hidden" data-testid={`img-library-thumb-${item.id}`}>
-                                  <Music className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
+                                  <FileCategoryIcon category={getFileCategory(item.contentType)} className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
                                   <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
                                 </div>
                                 <div className="flex flex-col min-w-0">
                                   <span className="font-bold text-white text-base truncate group-hover:text-[#22D3EE]/90 transition-colors" data-testid={`text-library-title-${item.id}`}>
                                     {item.title}
                                   </span>
-                                  <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-library-artist-${item.id}`}>
-                                    {item.artist ?? "Unknown"}
-                                  </span>
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-library-artist-${item.id}`}>
+                                      {item.artist ?? "Unknown"}
+                                    </span>
+                                    {item.fileSize && (
+                                      <span className="text-[10px] text-zinc-600 font-mono">{formatBytes(item.fileSize)}</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
 
-                              {/* Time Column */}
                               <div className="hidden sm:block text-sm text-zinc-400 group-hover:text-zinc-200 font-mono tracking-tighter" data-testid={`text-library-duration-${item.id}`}>
                                 3:45
                               </div>
 
-                              {/* Genre Column */}
                               <div className="hidden md:block text-sm text-zinc-500 group-hover:text-zinc-300" data-testid={`text-library-genre-${item.id}`}>
                                 —
                               </div>
 
-                              {/* Kind Column */}
                               <div className="hidden md:block px-4">
-                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${item.kind === 'purchase' ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-zinc-800 text-zinc-400'}`} data-testid={`text-library-kind-${item.id}`}>
-                                  {item.kind === 'purchase' ? 'Purchased' : 'Upload'}
+                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                                  item.kind === 'purchase' ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 
+                                  item.kind === 'free' ? 'bg-green-500/20 text-green-400' :
+                                  'bg-zinc-800 text-zinc-400'
+                                }`} data-testid={`text-library-kind-${item.id}`}>
+                                  {item.kind === 'purchase' ? 'Purchased' : item.kind === 'free' ? 'Free' : getFileCategory(item.contentType).toUpperCase()}
                                 </span>
                               </div>
 
-                              {/* Action Buttons */}
                               <div className="flex items-center space-x-2 justify-end pr-2">
+                                {item.objectPath && getFileCategory(item.contentType) !== "audio" && (
+                                  <button 
+                                    className="p-2.5 text-zinc-500 hover:text-[#22D3EE] rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                    aria-label="Open"
+                                    onClick={(e) => { e.stopPropagation(); setViewingItem(item); }}
+                                    data-testid={`button-library-view-${item.id}`}
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </button>
+                                )}
                                 <button 
                                   className="p-2.5 text-zinc-500 hover:text-[#22D3EE] rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
                                   aria-label="Like"
@@ -1828,14 +2419,6 @@ export default function ExplorePage() {
                                   data-testid={`button-library-like-${item.id}`}
                                 >
                                   <Heart className="w-4 h-4" />
-                                </button>
-                                <button 
-                                  className="p-2.5 text-zinc-500 hover:text-white rounded-full hover:bg-zinc-800 transition-all hidden md:block" 
-                                  aria-label="More options"
-                                  onClick={(e) => e.stopPropagation()}
-                                  data-testid={`button-library-more-${item.id}`}
-                                >
-                                  <MoreHorizontal className="w-4 h-4" />
                                 </button>
                               </div>
                             </div>
@@ -1846,29 +2429,28 @@ export default function ExplorePage() {
 
                   </div>
                 </TabsContent>
-              </div>
             </Tabs>
           </div>
-        </header>
-      </div>
 
-      <footer className="mx-auto w-full max-w-6xl px-6 pb-10 text-xs text-white/45" data-testid="text-explore-footer">
-        {tab === "radio-tv" && (
-          <span className="text-[#22D3EE]">Radio and TV will always be free. It's Universal Culture.</span>
-        )}
-        {tab === "live" && (
-          <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Some events will be offered $10, many will be free.</span></>
-        )}
-        {tab === "social" && (
-          <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Sell Your Songs for $1, Request them to be added to the Music section.</span></>
-        )}
-        {tab === "music" && (
-          <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">All Songs are $1 and stored in My Library.</span></>
-        )}
-        {tab === "library" && (
-          <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">My Library 50GB storage — $5/mo or $50/yr.</span></>
-        )}
-      </footer>
+          <footer className="mx-auto w-full max-w-6xl px-6 pb-10 text-xs text-white/45" data-testid="text-explore-footer">
+            {tab === "radio-tv" && (
+              <span className="text-[#22D3EE]">Radio and TV will always be free. It's Universal Culture.</span>
+            )}
+            {tab === "live" && (
+              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Some events will be offered $10, many will be free.</span></>
+            )}
+            {tab === "social" && (
+              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Sell Your Songs for $1, Request them to be added to the Music section.</span></>
+            )}
+            {tab === "music" && (
+              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">All Songs are $1 and stored in My Library.</span></>
+            )}
+            {tab === "library" && (
+              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">My Library 50GB storage — $5/mo or $50/yr.</span></>
+            )}
+          </footer>
+        </div>
+      </main>
 
       {/* Social Upload Dialog */}
       <Dialog open={showSocialUploadDialog} onOpenChange={setShowSocialUploadDialog}>
@@ -1898,32 +2480,27 @@ export default function ExplorePage() {
                 {uploadFile ? (
                   <div className="text-sm text-[#22D3EE] font-medium">{uploadFile.name}</div>
                 ) : (
-                  <div className="text-sm text-zinc-500">Click to select audio file (MP3, WAV, FLAC)</div>
+                  <div className="text-sm text-zinc-500">Click to select an audio file (MP3, WAV, etc.)</div>
                 )}
               </div>
               <input 
                 type="file" 
                 id="social-file-input"
-                accept="audio/*" 
+                accept="audio/*"
                 className="hidden"
                 onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
               />
             </div>
-            <div className="flex items-start space-x-3 pt-2">
-              <Checkbox
-                id="submit-for-sale"
-                checked={submitForSale}
+            <div className="flex items-center space-x-2">
+              <Checkbox 
+                id="submit-for-sale" 
+                checked={submitForSale} 
                 onCheckedChange={(checked) => setSubmitForSale(checked === true)}
-                className="border-zinc-600 data-[state=checked]:bg-[#22D3EE] data-[state=checked]:border-[#22D3EE]"
+                data-testid="checkbox-submit-for-sale"
               />
-              <div className="grid gap-1.5 leading-none">
-                <label htmlFor="submit-for-sale" className="text-sm font-medium text-white cursor-pointer">
-                  Submit for sale in Music catalogue
-                </label>
-                <p className="text-xs text-zinc-500">
-                  If approved by admins, your track will appear in the Music section for $1. You'll earn revenue from sales.
-                </p>
-              </div>
+              <Label htmlFor="submit-for-sale" className="text-sm text-zinc-300">
+                Submit for Music catalogue review ($1 listing)
+              </Label>
             </div>
           </div>
           <DialogFooter>
@@ -1940,7 +2517,6 @@ export default function ExplorePage() {
                 if (!uploadTitle.trim() || !uploadFile) return;
                 setIsUploading(true);
                 try {
-                  // Step 1: Get presigned URL
                   const urlRes = await fetch("/api/uploads/request-url", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1958,7 +2534,6 @@ export default function ExplorePage() {
                   
                   const { uploadURL, objectPath } = await urlRes.json();
                   
-                  // Step 2: Upload file directly to storage
                   const uploadRes = await fetch(uploadURL, {
                     method: "PUT",
                     body: uploadFile,
@@ -1969,7 +2544,6 @@ export default function ExplorePage() {
                     throw new Error("Failed to upload file");
                   }
                   
-                  // Step 3: Create social track record
                   const trackRes = await fetch("/api/social-tracks", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -1982,15 +2556,11 @@ export default function ExplorePage() {
                   });
                   
                   if (!trackRes.ok) {
-                    throw new Error("Failed to create track");
+                    const error = await trackRes.json();
+                    throw new Error(error.message || "Failed to create social track");
                   }
                   
-                  toast({ 
-                    title: "Track uploaded!", 
-                    description: submitForSale 
-                      ? "Your track has been submitted for admin review."
-                      : "Your track is now live in Social."
-                  });
+                  toast({ title: "Track uploaded!", description: submitForSale ? "Your track has been submitted for review." : "Your track is now live on Social." });
                   setShowSocialUploadDialog(false);
                   refetchSocialTracks();
                 } catch (error: any) {
@@ -2018,10 +2588,23 @@ export default function ExplorePage() {
           <DialogHeader>
             <DialogTitle className="text-xl font-bold">Upload to My Library</DialogTitle>
             <DialogDescription className="text-zinc-400">
-              Store private files in your personal library. These are only visible to you.
+              Store private files in your personal library. 200MB free storage.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {storageData && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span>Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'}</span>
+                  {!isAdmin && <span>{storagePercent}% used</span>}
+                </div>
+                {!isAdmin && (
+                  <div className="w-full bg-zinc-800 rounded-full h-1.5">
+                    <div className={`h-1.5 rounded-full transition-all ${storagePercent > 90 ? 'bg-red-400' : storagePercent > 70 ? 'bg-yellow-400' : 'bg-[#22D3EE]'}`} style={{ width: `${Math.min(storagePercent, 100)}%` }} />
+                  </div>
+                )}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="library-upload-title" className="text-sm text-zinc-300">File Name</Label>
               <Input
@@ -2038,16 +2621,39 @@ export default function ExplorePage() {
               <div className="border-2 border-dashed border-zinc-700 rounded-lg p-6 text-center hover:border-zinc-600 transition-colors cursor-pointer"
                 onClick={() => document.getElementById('library-file-input')?.click()}>
                 {uploadFile ? (
-                  <div className="text-sm text-[#22D3EE] font-medium">{uploadFile.name}</div>
+                  <div className="flex items-center justify-center space-x-2">
+                    <FileCategoryIcon category={getFileCategory(uploadFile.type)} className="w-5 h-5 text-[#22D3EE]" />
+                    <span className="text-sm text-[#22D3EE] font-medium">{uploadFile.name}</span>
+                    <span className="text-xs text-zinc-500">({formatBytes(uploadFile.size)})</span>
+                  </div>
                 ) : (
-                  <div className="text-sm text-zinc-500">Click to select file (audio, video, documents)</div>
+                  <div className="space-y-1">
+                    <Upload className="w-8 h-8 mx-auto text-zinc-600" />
+                    <div className="text-sm text-zinc-500">Click to select a file</div>
+                    <div className="text-[10px] text-zinc-600">
+                      Audio (MP3, M4A, WAV, FLAC) · Images (JPG, PNG, WEBP) · PDF
+                      {canUploadVideo ? " · Video (MP4, WEBM)" : ""}
+                    </div>
+                    {!canUploadVideo && (
+                      <div className="text-[10px] text-zinc-500 mt-1">Subscribe ($5/mo) to upload videos</div>
+                    )}
+                  </div>
                 )}
               </div>
               <input 
                 type="file" 
                 id="library-file-input"
                 className="hidden"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                accept={canUploadVideo ? ACCEPTED_FILE_TYPES : ACCEPTED_NO_VIDEO}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  if (file) {
+                    setUploadFile(file);
+                    if (!uploadTitle.trim()) {
+                      setUploadTitle(file.name.replace(/\.[^/.]+$/, ""));
+                    }
+                  }
+                }}
               />
             </div>
           </div>
@@ -2065,7 +2671,6 @@ export default function ExplorePage() {
                 if (!uploadTitle.trim() || !uploadFile) return;
                 setIsUploading(true);
                 try {
-                  // Step 1: Get presigned URL
                   const urlRes = await fetch("/api/uploads/request-url", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -2083,7 +2688,6 @@ export default function ExplorePage() {
                   
                   const { uploadURL, objectPath } = await urlRes.json();
                   
-                  // Step 2: Upload file directly to storage
                   const uploadRes = await fetch(uploadURL, {
                     method: "PUT",
                     body: uploadFile,
@@ -2094,7 +2698,6 @@ export default function ExplorePage() {
                     throw new Error("Failed to upload file");
                   }
                   
-                  // Step 3: Create library item record
                   const itemRes = await fetch("/api/me/library", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -2103,7 +2706,7 @@ export default function ExplorePage() {
                       type: "upload",
                       objectPath,
                       fileSize: uploadFile.size,
-                      metadata: { title: uploadTitle, artist: "You" },
+                      metadata: { title: uploadTitle, artist: "You", contentType: uploadFile.type },
                     }),
                   });
                   
@@ -2116,6 +2719,8 @@ export default function ExplorePage() {
                   
                   toast({ title: "File uploaded!", description: "Your file has been added to your library." });
                   setShowLibraryUploadDialog(false);
+                  setUploadFile(null);
+                  setUploadTitle("");
                   refetchLibraryUploads();
                 } catch (error: any) {
                   toast({ 
@@ -2135,6 +2740,203 @@ export default function ExplorePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={showMusicUploadDialog} onOpenChange={setShowMusicUploadDialog}>
+        <DialogContent className="bg-zinc-900 border border-white/10 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-xl">Upload Song</DialogTitle>
+            <DialogDescription className="text-white/60">
+              Add a new song to the Music catalogue. Price is set to $1 by default.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="music-title">Title *</Label>
+              <Input
+                id="music-title"
+                value={musicUploadTitle}
+                onChange={(e) => setMusicUploadTitle(e.target.value)}
+                placeholder="Song title"
+                className="bg-black/30 border-white/10"
+                data-testid="input-music-upload-title"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="music-artist">Artist *</Label>
+              <Input
+                id="music-artist"
+                value={musicUploadArtist}
+                onChange={(e) => setMusicUploadArtist(e.target.value)}
+                placeholder="Artist name"
+                className="bg-black/30 border-white/10"
+                data-testid="input-music-upload-artist"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="music-album">Album (optional)</Label>
+              <Input
+                id="music-album"
+                value={musicUploadAlbum}
+                onChange={(e) => setMusicUploadAlbum(e.target.value)}
+                placeholder="Album name"
+                className="bg-black/30 border-white/10"
+                data-testid="input-music-upload-album"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="music-genre">Genre (optional)</Label>
+              <Input
+                id="music-genre"
+                value={musicUploadGenre}
+                onChange={(e) => setMusicUploadGenre(e.target.value)}
+                placeholder="e.g. Afrobeats, Highlife, Amapiano"
+                className="bg-black/30 border-white/10"
+                data-testid="input-music-upload-genre"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="music-file">Audio File *</Label>
+              <Input
+                id="music-file"
+                type="file"
+                accept="audio/*"
+                onChange={(e) => setMusicUploadFile(e.target.files?.[0] || null)}
+                className="bg-black/30 border-white/10 file:text-white/70 file:bg-white/10 file:border-0 file:rounded file:px-3 file:py-1 file:mr-3"
+                data-testid="input-music-upload-file"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowMusicUploadDialog(false);
+                setMusicUploadTitle("");
+                setMusicUploadArtist("");
+                setMusicUploadAlbum("");
+                setMusicUploadGenre("");
+                setMusicUploadFile(null);
+              }}
+              className="bg-white/10 text-white hover:bg-white/15 border border-white/10"
+              data-testid="button-music-upload-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!musicUploadTitle || !musicUploadArtist || !musicUploadFile || isMusicUploading}
+              onClick={async () => {
+                if (!musicUploadFile || !musicUploadTitle || !musicUploadArtist) return;
+                setIsMusicUploading(true);
+                try {
+                  const urlRes = await fetch("/api/uploads/request-url", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({
+                      fileName: musicUploadFile.name,
+                      contentType: musicUploadFile.type,
+                    }),
+                  });
+                  if (!urlRes.ok) throw new Error("Failed to get upload URL");
+                  const { uploadURL, objectPath } = await urlRes.json();
+
+                  const uploadRes = await fetch(uploadURL, {
+                    method: "PUT",
+                    body: musicUploadFile,
+                    headers: { "Content-Type": musicUploadFile.type },
+                  });
+                  if (!uploadRes.ok) throw new Error("Failed to upload file");
+
+                  const songRes = await fetch("/api/songs", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({
+                      title: musicUploadTitle,
+                      artist: musicUploadArtist,
+                      album: musicUploadAlbum || null,
+                      genre: musicUploadGenre || null,
+                      audioUrl: objectPath,
+                      price: 100,
+                    }),
+                  });
+                  if (!songRes.ok) {
+                    const err = await songRes.json();
+                    throw new Error(err.message || "Failed to create song");
+                  }
+
+                  toast({ title: "Song uploaded!", description: `${musicUploadTitle} has been added to the catalogue.` });
+                  setShowMusicUploadDialog(false);
+                  setMusicUploadTitle("");
+                  setMusicUploadArtist("");
+                  setMusicUploadAlbum("");
+                  setMusicUploadGenre("");
+                  setMusicUploadFile(null);
+                  queryClient.invalidateQueries({ queryKey: ["/api/songs"] });
+                } catch (error: any) {
+                  toast({
+                    title: "Upload failed",
+                    description: error.message || "Please try again.",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setIsMusicUploading(false);
+                }
+              }}
+              className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90 font-bold"
+              data-testid="button-music-upload-submit"
+            >
+              {isMusicUploading ? "Uploading..." : "Upload Song"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {viewingItem && (
+        <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col" data-testid="panel-file-viewer">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+            <div className="flex items-center space-x-3">
+              <FileCategoryIcon category={getFileCategory(viewingItem.contentType)} className="w-5 h-5 text-[#22D3EE]" />
+              <span className="text-white font-bold text-lg">{viewingItem.title}</span>
+              <span className="text-xs text-zinc-500 uppercase font-bold">{getFileCategory(viewingItem.contentType)}</span>
+            </div>
+            <button 
+              onClick={() => setViewingItem(null)} 
+              className="p-2 text-zinc-400 hover:text-white rounded-full hover:bg-zinc-800 transition-all"
+              data-testid="button-viewer-close"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
+            {getFileCategory(viewingItem.contentType) === "image" && viewingItem.objectPath && (
+              <img 
+                src={viewingItem.objectPath} 
+                alt={viewingItem.title}
+                className="max-w-full max-h-full object-contain rounded-lg"
+                data-testid="viewer-image"
+              />
+            )}
+            {getFileCategory(viewingItem.contentType) === "video" && viewingItem.objectPath && (
+              <video 
+                src={viewingItem.objectPath}
+                controls 
+                autoPlay
+                className="max-w-full max-h-full rounded-lg"
+                data-testid="viewer-video"
+              />
+            )}
+            {getFileCategory(viewingItem.contentType) === "pdf" && viewingItem.objectPath && (
+              <iframe 
+                src={viewingItem.objectPath}
+                className="w-full h-full rounded-lg bg-white"
+                title={viewingItem.title}
+                data-testid="viewer-pdf"
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

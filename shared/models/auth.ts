@@ -18,7 +18,7 @@ export const users = pgTable("users", {
   email: varchar("email").unique(),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
-  handle: varchar("handle").unique(), // @username, min 7 chars
+  handle: varchar("handle").unique(), // @username, min 6 chars
   handleLastChanged: timestamp("handle_last_changed"),
   handleChangesThisMonth: varchar("handle_changes_this_month").default("0"),
   profileImageUrl: varchar("profile_image_url"),

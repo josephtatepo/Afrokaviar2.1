@@ -124,6 +124,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  const { ensureRootAdmin } = await import("./replit_integrations/auth/storage");
+  await ensureRootAdmin();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

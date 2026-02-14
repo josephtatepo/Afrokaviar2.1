@@ -10,6 +10,7 @@ export const channelHealth = pgTable("channel_health", {
   channelGroup: varchar("channel_group").notNull(),
   iptvUrl: varchar("iptv_url").notNull(),
   isOnline: boolean("is_online").default(true),
+  validated: boolean("validated").default(false),
   lastChecked: timestamp("last_checked"),
   consecutiveFailures: integer("consecutive_failures").default(0),
   createdAt: timestamp("created_at").defaultNow(),

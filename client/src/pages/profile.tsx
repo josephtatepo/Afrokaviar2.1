@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Check, Clock, Copy, LogOut, Mail, Save, User, UserPlus, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Camera, Check, Clock, Copy, LogOut, Mail, Save, User, UserPlus, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,8 +32,10 @@ export default function Profile() {
   
   const [handle, setHandle] = useState("");
   const [handleError, setHandleError] = useState("");
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  const isAdmin = user?.email === ADMIN_ROOT_EMAIL;
+  const isAdmin = !!user?.adminRole;
 
   const { data: profileData } = useQuery({
     queryKey: ["/api/user/profile"],
@@ -109,8 +111,36 @@ export default function Profile() {
     },
   });
 
-  // Admins can have 3+ char handles, regular users need 7+
-  const minHandleLength = isAdmin ? 3 : 7;
+  const handleAvatarUpload = async (file: File) => {
+    setIsUploadingAvatar(true);
+    try {
+      const urlRes = await fetch("/api/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type }),
+      });
+      if (!urlRes.ok) throw new Error("Failed to get upload URL");
+      const { uploadURL, objectPath } = await urlRes.json();
+      await fetch(uploadURL, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+      const res = await fetch("/api/me/profile-image", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ profileImageUrl: objectPath }),
+      });
+      if (!res.ok) throw new Error("Failed to update profile image");
+      queryClient.invalidateQueries({ queryKey: ["/api/user"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
+      toast({ title: "Profile image updated!" });
+    } catch (err: any) {
+      toast({ title: "Failed to update image", description: err.message, variant: "destructive" });
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const minHandleLength = isAdmin ? 3 : 6;
 
   const handleSaveHandle = () => {
     setHandleError("");
@@ -174,19 +204,40 @@ export default function Profile() {
 
         {/* Profile Section */}
         <Card className="rounded-2xl border border-white/10 bg-white/5 p-6 text-white/80 backdrop-blur-md mb-6" data-testid="panel-profile">
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleAvatarUpload(file);
+              e.target.value = "";
+            }}
+            data-testid="input-profile-avatar"
+          />
           <div className="flex items-center gap-4 mb-6">
-            {user.profileImageUrl ? (
-              <img 
-                src={user.profileImageUrl} 
-                alt="Profile" 
-                className="w-16 h-16 rounded-full border-2 border-white/10"
-                data-testid="img-profile-avatar"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center">
-                <User className="w-8 h-8 text-white/40" />
+            <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
+              {user.profileImageUrl ? (
+                <img 
+                  src={user.profileImageUrl} 
+                  alt="Profile" 
+                  className="w-16 h-16 rounded-full border-2 border-white/10"
+                  data-testid="img-profile-avatar"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center">
+                  <User className="w-8 h-8 text-white/40" />
+                </div>
+              )}
+              <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                {isUploadingAvatar ? (
+                  <div className="w-5 h-5 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Camera className="w-5 h-5 text-white/80" />
+                )}
               </div>
-            )}
+            </div>
             <div>
               <div className="font-display text-xl text-white" data-testid="text-profile-name">
                 {user.firstName} {user.lastName}

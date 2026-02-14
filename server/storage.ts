@@ -16,6 +16,10 @@ import {
   type InsertFeaturedContent,
   type SocialTrack,
   type InsertSocialTrack,
+  type SocialPost,
+  type InsertSocialPost,
+  type SocialPostLike,
+  type InsertSocialPostLike,
   type LibraryItem,
   type InsertLibraryItem,
   songs,
@@ -30,6 +34,8 @@ import {
   invites,
   featuredContent,
   socialTracks,
+  socialPosts,
+  socialPostLikes,
   libraryItems,
   type AdminUser,
   type InsertAdminUser,
@@ -79,6 +85,8 @@ export interface IStorage {
   upsertChannel(channel: InsertChannelHealth): Promise<ChannelHealth>;
   updateChannelStatus(id: string, isOnline: boolean, consecutiveFailures: number): Promise<ChannelHealth | undefined>;
   getChannelsNeedingCheck(olderThanHours: number): Promise<ChannelHealth[]>;
+  getValidatedChannels(): Promise<ChannelHealth[]>;
+  toggleChannelValidation(id: string, validated: boolean): Promise<ChannelHealth | undefined>;
   
   // Analytics
   getAnalytics(): Promise<{ uploads: number; purchases: number; promoted: number; libraryItems: number; registeredUsers: number }>;
@@ -92,6 +100,8 @@ export interface IStorage {
   updateSocialTrackStatus(id: string, status: string, reviewedBy: string): Promise<SocialTrack | undefined>;
   promoteSocialTrackToSong(trackId: string, songId: string): Promise<SocialTrack | undefined>;
   submitTrackForSale(trackId: string): Promise<SocialTrack | undefined>;
+  deleteSocialTrack(id: string, userId: string): Promise<boolean>;
+  updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined>;
   
   // Invites
   createInvite(invite: InsertInvite): Promise<Invite>;
@@ -103,10 +113,19 @@ export interface IStorage {
   getFeaturedContent(position: string): Promise<FeaturedContent | undefined>;
   setFeaturedContent(content: InsertFeaturedContent): Promise<FeaturedContent>;
   
+  // Social posts
+  createSocialPost(post: InsertSocialPost): Promise<SocialPost>;
+  getSocialPosts(limit?: number, offset?: number): Promise<SocialPost[]>;
+  getSocialPostById(id: string): Promise<SocialPost | undefined>;
+  deleteSocialPost(id: string, authorId: string): Promise<boolean>;
+  likeSocialPost(userId: string, postId: string): Promise<boolean>;
+  unlikeSocialPost(userId: string, postId: string): Promise<boolean>;
+  getSocialPostLikes(userId: string, postIds: string[]): Promise<string[]>;
+  
   // Library items
   createLibraryItem(item: InsertLibraryItem): Promise<LibraryItem>;
   getUserLibraryItems(userId: string, type?: string): Promise<LibraryItem[]>;
-  getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number }>;
+  getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number; isAdmin: boolean }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -385,6 +404,18 @@ export class DatabaseStorage implements IStorage {
       .where(sql`${channelHealth.lastChecked} IS NULL OR ${channelHealth.lastChecked} < ${cutoff}`);
   }
 
+  async getValidatedChannels(): Promise<ChannelHealth[]> {
+    return db.select().from(channelHealth).where(eq(channelHealth.validated, true)).orderBy(channelHealth.name);
+  }
+
+  async toggleChannelValidation(id: string, validated: boolean): Promise<ChannelHealth | undefined> {
+    const [updated] = await db.update(channelHealth)
+      .set({ validated, updatedAt: new Date() })
+      .where(eq(channelHealth.id, id))
+      .returning();
+    return updated;
+  }
+
   // Analytics
   async getAnalytics(): Promise<{ uploads: number; purchases: number; promoted: number; libraryItems: number; registeredUsers: number }> {
     const [uploadsResult] = await db.select({ count: count() }).from(socialTracks);
@@ -464,6 +495,20 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteSocialTrack(id: string, userId: string): Promise<boolean> {
+    const result = await db.delete(socialTracks).where(and(eq(socialTracks.id, id), eq(socialTracks.uploadedBy, userId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined> {
+    const [updated] = await db
+      .update(users)
+      .set({ profileImageUrl, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return updated;
+  }
+
   // Invites
   async createInvite(invite: InsertInvite): Promise<Invite> {
     const [newInvite] = await db.insert(invites).values(invite).returning();
@@ -522,12 +567,59 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(libraryItems).where(eq(libraryItems.userId, userId)).orderBy(desc(libraryItems.createdAt));
   }
 
-  async getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number }> {
-    const FIFTY_GB = 50 * 1024 * 1024 * 1024; // 50GB limit
+  async getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number; isAdmin: boolean }> {
+    const FREE_LIMIT = 200 * 1024 * 1024; // 200MB
+    const adminUser = await this.getAdminUser(userId);
+    const isAdminUser = !!adminUser;
     const items = await db.select({ fileSize: libraryItems.fileSize }).from(libraryItems)
       .where(and(eq(libraryItems.userId, userId), eq(libraryItems.type, "upload")));
     const usedBytes = items.reduce((sum, item) => sum + (item.fileSize || 0), 0);
-    return { usedBytes, limitBytes: FIFTY_GB };
+    return { usedBytes, limitBytes: isAdminUser ? Number.MAX_SAFE_INTEGER : FREE_LIMIT, isAdmin: isAdminUser };
+  }
+
+  async createSocialPost(post: InsertSocialPost): Promise<SocialPost> {
+    const [created] = await db.insert(socialPosts).values(post).returning();
+    return created;
+  }
+
+  async getSocialPosts(limit: number = 50, offset: number = 0): Promise<SocialPost[]> {
+    return db.select().from(socialPosts).orderBy(desc(socialPosts.createdAt)).limit(limit).offset(offset);
+  }
+
+  async getSocialPostById(id: string): Promise<SocialPost | undefined> {
+    const [post] = await db.select().from(socialPosts).where(eq(socialPosts.id, id));
+    return post;
+  }
+
+  async deleteSocialPost(id: string, authorId: string): Promise<boolean> {
+    const result = await db.delete(socialPosts).where(and(eq(socialPosts.id, id), eq(socialPosts.authorId, authorId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async likeSocialPost(userId: string, postId: string): Promise<boolean> {
+    const existing = await db.select().from(socialPostLikes)
+      .where(and(eq(socialPostLikes.userId, userId), eq(socialPostLikes.postId, postId)));
+    if (existing.length > 0) return false;
+    await db.insert(socialPostLikes).values({ userId, postId });
+    await db.update(socialPosts).set({ likesCount: sql`${socialPosts.likesCount} + 1` }).where(eq(socialPosts.id, postId));
+    return true;
+  }
+
+  async unlikeSocialPost(userId: string, postId: string): Promise<boolean> {
+    const result = await db.delete(socialPostLikes)
+      .where(and(eq(socialPostLikes.userId, userId), eq(socialPostLikes.postId, postId)));
+    if (result.rowCount && result.rowCount > 0) {
+      await db.update(socialPosts).set({ likesCount: sql`GREATEST(${socialPosts.likesCount} - 1, 0)` }).where(eq(socialPosts.id, postId));
+      return true;
+    }
+    return false;
+  }
+
+  async getSocialPostLikes(userId: string, postIds: string[]): Promise<string[]> {
+    if (postIds.length === 0) return [];
+    const likes = await db.select({ postId: socialPostLikes.postId }).from(socialPostLikes)
+      .where(and(eq(socialPostLikes.userId, userId), sql`${socialPostLikes.postId} = ANY(${postIds})`));
+    return likes.map(l => l.postId);
   }
 }
 
