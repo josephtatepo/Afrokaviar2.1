@@ -2,7 +2,6 @@ import type { Express } from "express";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { isAuthenticated } from "../../auth/socialAuth";
 import { storage } from "../../storage";
-import { stripeService } from "../../stripeService";
 
 const ALLOWED_CONTENT_TYPES = [
   "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac",
@@ -10,7 +9,6 @@ const ALLOWED_CONTENT_TYPES = [
   "video/mp4", "video/webm",
   "application/pdf",
 ];
-const VIDEO_TYPES = ["video/mp4", "video/webm"];
 
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
@@ -35,21 +33,15 @@ export function registerObjectStorageRoutes(app: Express): void {
       const adminUser = await storage.getAdminUser(userId);
       const isAdminUser = !!adminUser;
 
-      if (!isAdminUser && contentType && VIDEO_TYPES.includes(contentType)) {
-        const user = await storage.getUser(userId);
-        if (!user?.stripeSubscriptionId) {
-          return res.status(403).json({ error: "Subscription required to upload videos." });
-        }
-        const subscription = await stripeService.getSubscription(user.stripeSubscriptionId);
-        if (subscription?.status !== "active") {
-          return res.status(403).json({ error: "Active subscription required to upload videos." });
-        }
+      const MAX_FILE_SIZE = 50 * 1024 * 1024;
+      if (!isAdminUser && size && size > MAX_FILE_SIZE) {
+        return res.status(400).json({ error: "File size exceeds 50MB limit." });
       }
 
       if (!isAdminUser && size) {
         const storageStats = await storage.getUserStorageStats(userId);
         if (storageStats.usedBytes + size > storageStats.limitBytes) {
-          return res.status(403).json({ error: "Storage limit reached (200MB free)." });
+          return res.status(403).json({ error: "Storage limit reached. Upgrade for more storage." });
         }
       }
 

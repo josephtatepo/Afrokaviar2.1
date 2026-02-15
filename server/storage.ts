@@ -20,6 +20,10 @@ import {
   type InsertSocialPost,
   type SocialPostLike,
   type InsertSocialPostLike,
+  type SocialPostComment,
+  type InsertSocialPostComment,
+  type Clip,
+  type InsertClip,
   type LibraryItem,
   type InsertLibraryItem,
   songs,
@@ -36,6 +40,9 @@ import {
   socialTracks,
   socialPosts,
   socialPostLikes,
+  socialPostComments,
+  clips,
+  clipLikes,
   libraryItems,
   type AdminUser,
   type InsertAdminUser,
@@ -101,6 +108,7 @@ export interface IStorage {
   promoteSocialTrackToSong(trackId: string, songId: string): Promise<SocialTrack | undefined>;
   submitTrackForSale(trackId: string): Promise<SocialTrack | undefined>;
   deleteSocialTrack(id: string, userId: string): Promise<boolean>;
+  deleteSocialTrackAsAdmin(id: string): Promise<boolean>;
   updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined>;
   
   // Invites
@@ -122,6 +130,20 @@ export interface IStorage {
   unlikeSocialPost(userId: string, postId: string): Promise<boolean>;
   getSocialPostLikes(userId: string, postIds: string[]): Promise<string[]>;
   
+  // Social post comments
+  createSocialPostComment(comment: InsertSocialPostComment): Promise<SocialPostComment>;
+  getSocialPostComments(postId: string, limit?: number, offset?: number): Promise<SocialPostComment[]>;
+  deleteSocialPostComment(id: string, authorId: string): Promise<boolean>;
+  
+  // Clips
+  createClip(clip: InsertClip): Promise<Clip>;
+  getClips(limit?: number, offset?: number): Promise<Clip[]>;
+  getClipById(id: string): Promise<Clip | undefined>;
+  deleteClip(id: string, authorId: string): Promise<boolean>;
+  likeClip(userId: string, clipId: string): Promise<boolean>;
+  unlikeClip(userId: string, clipId: string): Promise<boolean>;
+  getClipLikes(userId: string, clipIds: string[]): Promise<string[]>;
+
   // Library items
   createLibraryItem(item: InsertLibraryItem): Promise<LibraryItem>;
   getUserLibraryItems(userId: string, type?: string): Promise<LibraryItem[]>;
@@ -500,6 +522,11 @@ export class DatabaseStorage implements IStorage {
     return result.rowCount ? result.rowCount > 0 : false;
   }
 
+  async deleteSocialTrackAsAdmin(id: string): Promise<boolean> {
+    const result = await db.delete(socialTracks).where(eq(socialTracks.id, id));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
   async updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined> {
     const [updated] = await db
       .update(users)
@@ -620,6 +647,76 @@ export class DatabaseStorage implements IStorage {
     const likes = await db.select({ postId: socialPostLikes.postId }).from(socialPostLikes)
       .where(and(eq(socialPostLikes.userId, userId), sql`${socialPostLikes.postId} = ANY(${postIds})`));
     return likes.map(l => l.postId);
+  }
+
+  async createSocialPostComment(comment: InsertSocialPostComment): Promise<SocialPostComment> {
+    const [created] = await db.insert(socialPostComments).values(comment).returning();
+    await db.update(socialPosts).set({ commentsCount: sql`${socialPosts.commentsCount} + 1` }).where(eq(socialPosts.id, comment.postId));
+    return created;
+  }
+
+  async getSocialPostComments(postId: string, limit: number = 50, offset: number = 0): Promise<SocialPostComment[]> {
+    return db.select().from(socialPostComments)
+      .where(eq(socialPostComments.postId, postId))
+      .orderBy(desc(socialPostComments.createdAt))
+      .limit(limit).offset(offset);
+  }
+
+  async deleteSocialPostComment(id: string, authorId: string): Promise<boolean> {
+    const [comment] = await db.select().from(socialPostComments).where(eq(socialPostComments.id, id));
+    if (!comment) return false;
+    const result = await db.delete(socialPostComments)
+      .where(and(eq(socialPostComments.id, id), eq(socialPostComments.authorId, authorId)));
+    if (result.rowCount && result.rowCount > 0) {
+      await db.update(socialPosts).set({ commentsCount: sql`GREATEST(${socialPosts.commentsCount} - 1, 0)` }).where(eq(socialPosts.id, comment.postId));
+      return true;
+    }
+    return false;
+  }
+
+  async createClip(clip: InsertClip): Promise<Clip> {
+    const [created] = await db.insert(clips).values(clip).returning();
+    return created;
+  }
+
+  async getClips(limit: number = 50, offset: number = 0): Promise<Clip[]> {
+    return db.select().from(clips).orderBy(desc(clips.createdAt)).limit(limit).offset(offset);
+  }
+
+  async getClipById(id: string): Promise<Clip | undefined> {
+    const [clip] = await db.select().from(clips).where(eq(clips.id, id));
+    return clip;
+  }
+
+  async deleteClip(id: string, authorId: string): Promise<boolean> {
+    const result = await db.delete(clips).where(and(eq(clips.id, id), eq(clips.authorId, authorId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async likeClip(userId: string, clipId: string): Promise<boolean> {
+    const existing = await db.select().from(clipLikes)
+      .where(and(eq(clipLikes.userId, userId), eq(clipLikes.clipId, clipId)));
+    if (existing.length > 0) return false;
+    await db.insert(clipLikes).values({ userId, clipId });
+    await db.update(clips).set({ likesCount: sql`${clips.likesCount} + 1` }).where(eq(clips.id, clipId));
+    return true;
+  }
+
+  async unlikeClip(userId: string, clipId: string): Promise<boolean> {
+    const result = await db.delete(clipLikes)
+      .where(and(eq(clipLikes.userId, userId), eq(clipLikes.clipId, clipId)));
+    if (result.rowCount && result.rowCount > 0) {
+      await db.update(clips).set({ likesCount: sql`GREATEST(${clips.likesCount} - 1, 0)` }).where(eq(clips.id, clipId));
+      return true;
+    }
+    return false;
+  }
+
+  async getClipLikes(userId: string, clipIds: string[]): Promise<string[]> {
+    if (clipIds.length === 0) return [];
+    const likes = await db.select({ clipId: clipLikes.clipId }).from(clipLikes)
+      .where(and(eq(clipLikes.userId, userId), sql`${clipLikes.clipId} = ANY(${clipIds})`));
+    return likes.map(l => l.clipId);
   }
 }
 

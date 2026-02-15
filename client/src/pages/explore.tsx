@@ -38,13 +38,20 @@ import {
   Volume2,
   VolumeX,
   Image as ImageIcon,
+  Maximize2,
+  Minimize2,
   Pause,
+  Moon,
+  Palette,
+  Send,
+  Sun,
   X,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/lib/i18n";
+import { useTheme, THEME_PREVIEW, type ColorTheme } from "@/lib/theme";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,6 +64,21 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
+
+function extractYouTubeId(text: string): string | null {
+  const patterns = [
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/,
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+    /(?:https?:\/\/)?youtu\.be\/([a-zA-Z0-9_-]{11})/,
+    /(?:https?:\/\/)?(?:www\.)?youtube\.com\/live\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
 
 type TvChannel = {
   id: string;
@@ -116,6 +138,17 @@ type SocialPost = {
   authorImage: string | null;
 };
 
+type SocialPostComment = {
+  id: string;
+  postId: string;
+  authorId: string;
+  textContent: string;
+  createdAt: string;
+  authorHandle: string;
+  authorName: string;
+  authorImage: string | null;
+};
+
 type LibraryItem = {
   id: string;
   title: string;
@@ -150,7 +183,6 @@ function FileCategoryIcon({ category, className }: { category: FileCategory; cla
 
 const ACCEPTED_FILE_TYPES = ".mp3,.m4a,.wav,.flac,.jpg,.jpeg,.png,.webp,.mp4,.webm,.pdf";
 const ACCEPTED_AUDIO = ".mp3,.m4a,.wav,.flac";
-const ACCEPTED_NO_VIDEO = ".mp3,.m4a,.wav,.flac,.jpg,.jpeg,.png,.webp,.pdf";
 
 const ADMIN_ROOT_EMAIL = "josephtatepo@gmail.com";
 
@@ -381,13 +413,28 @@ export default function ExplorePage() {
   const [tab, setTab] = useState("radio-tv");
   const [query, setQuery] = useState("");
   const queryClient = useQueryClient();
-  const [socialView, setSocialView] = useState<"posts" | "tracks">("posts");
+  const [socialView, setSocialView] = useState<"posts" | "tracks" | "clips">("posts");
   const [socialPlayingId, setSocialPlayingId] = useState<string | null>(null);
 
   // Auth
   const { user, isAuthenticated } = useAuth();
   const { t, lang, toggleLang } = useI18n();
+  const { colorTheme, mode, setColorTheme, toggleMode } = useTheme();
+  const [showThemePanel, setShowThemePanel] = useState(false);
+  const themePanelRef = useRef<HTMLDivElement>(null);
   
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (themePanelRef.current && !themePanelRef.current.contains(e.target as Node)) {
+        setShowThemePanel(false);
+      }
+    }
+    if (showThemePanel) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showThemePanel]);
+
   const userEmail = user?.email ?? "member@afrokaviar.com";
   const isAdmin = !!user?.adminRole;
   const role = isAdmin ? "admin" : "member";
@@ -407,7 +454,7 @@ export default function ExplorePage() {
   );
 
   // Music - Real API data
-  const { data: songs = [], isLoading: songsLoading } = useQuery<Song[]>({
+  const { data: songs = [], isLoading: songsLoading, refetch: refetchSongs } = useQuery<Song[]>({
     queryKey: ["/api/songs"],
     enabled: tab === "music",
   });
@@ -550,6 +597,23 @@ export default function ExplorePage() {
     queryKey: ["/api/social-posts"],
     enabled: tab === "social",
   });
+  type ClipWithAuthor = {
+    id: string;
+    title: string;
+    description: string | null;
+    videoUrl: string;
+    thumbnailUrl: string | null;
+    duration: number | null;
+    authorId: string;
+    likesCount: number;
+    commentsCount: number;
+    createdAt: string;
+    author: { id: string; handle: string | null; profileImageUrl: string | null; firstName: string | null } | null;
+  };
+  const { data: clipsData = [], refetch: refetchClips } = useQuery<ClipWithAuthor[]>({
+    queryKey: ["/api/clips"],
+    enabled: tab === "social",
+  });
   const [socialSaved, setSocialSaved] = useState<Record<string, boolean>>({});
 
   // Fetch library uploads from API
@@ -631,7 +695,7 @@ export default function ExplorePage() {
   });
   const hasActiveSubscription = subscriptionData?.subscription?.status === "active";
   const canUploadToLibrary = true;
-  const canUploadVideo = hasActiveSubscription || isAdmin;
+  const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
   // Storage stats query
   const { data: storageData, refetch: refetchStorage } = useQuery<{ usedBytes: number; limitBytes: number; isAdmin: boolean }>({
@@ -659,6 +723,19 @@ export default function ExplorePage() {
 
   // Upload dialog states
   const [showSocialUploadDialog, setShowSocialUploadDialog] = useState(false);
+  const [showClipUploadDialog, setShowClipUploadDialog] = useState(false);
+  const [clipTitle, setClipTitle] = useState("");
+  const [clipFile, setClipFile] = useState<File | null>(null);
+  const [clipVideoPreview, setClipVideoPreview] = useState<string | null>(null);
+  const [isClipUploading, setIsClipUploading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [clipLikes, setClipLikes] = useState<Record<string, boolean>>({});
   const [showLibraryUploadDialog, setShowLibraryUploadDialog] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
   const [submitForSale, setSubmitForSale] = useState(false);
@@ -673,15 +750,47 @@ export default function ExplorePage() {
   const [postVideoFile, setPostVideoFile] = useState<File | null>(null);
   const [isPostSubmitting, setIsPostSubmitting] = useState(false);
   const [postLikes, setPostLikes] = useState<Record<string, boolean>>({});
+  const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
+  const [commentTexts, setCommentTexts] = useState<Record<string, string>>({});
+  const [postComments, setPostComments] = useState<Record<string, SocialPostComment[]>>({});
+  const [loadingComments, setLoadingComments] = useState<Record<string, boolean>>({});
+  const [submittingComment, setSubmittingComment] = useState<Record<string, boolean>>({});
   const postImageInputRef = useRef<HTMLInputElement>(null);
   const postAudioInputRef = useRef<HTMLInputElement>(null);
   const postVideoInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const tvPlayerRef = useRef<HTMLDivElement | null>(null);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
+  const [nowPlayingId, setNowPlayingId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [radioVolume, setRadioVolume] = useState(80);
   const [isPiPActive, setIsPiPActive] = useState(false);
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const theaterVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const exitTheaterMode = () => {
+    setIsTheaterMode(false);
+    if (videoRef.current) { videoRef.current.muted = false; }
+  };
+
+  useEffect(() => {
+    if (isTheaterMode) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [isTheaterMode]);
+
+  useEffect(() => {
+    if (!isTheaterMode) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') exitTheaterMode();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isTheaterMode]);
 
   const togglePiP = async () => {
     if (!videoRef.current) return;
@@ -781,6 +890,162 @@ export default function ExplorePage() {
       .catch(() => {});
   }, [socialPostsData, isAuthenticated]);
 
+  const fetchComments = async (postId: string) => {
+    setLoadingComments((p) => ({ ...p, [postId]: true }));
+    try {
+      const res = await fetch(`/api/social-posts/${postId}/comments`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setPostComments((p) => ({ ...p, [postId]: data }));
+      }
+    } catch {}
+    setLoadingComments((p) => ({ ...p, [postId]: false }));
+  };
+
+  const toggleComments = (postId: string) => {
+    const isExpanded = expandedComments[postId];
+    setExpandedComments((p) => ({ ...p, [postId]: !isExpanded }));
+    if (!isExpanded && !postComments[postId]) {
+      fetchComments(postId);
+    }
+  };
+
+  const submitComment = async (postId: string) => {
+    const text = commentTexts[postId]?.trim();
+    if (!text) return;
+    if (!isAuthenticated) {
+      toast({ title: t("social.sign_in_required") || "Sign in required", description: t("social.sign_in_comment") || "Please sign in to comment.", variant: "destructive" });
+      return;
+    }
+    setSubmittingComment((p) => ({ ...p, [postId]: true }));
+    try {
+      const res = await fetch(`/api/social-posts/${postId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ textContent: text }),
+      });
+      if (res.ok) {
+        const newComment = await res.json();
+        setPostComments((p) => ({ ...p, [postId]: [newComment, ...(p[postId] || [])] }));
+        setCommentTexts((p) => ({ ...p, [postId]: "" }));
+        refetchSocialPosts();
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to post comment.", variant: "destructive" });
+    }
+    setSubmittingComment((p) => ({ ...p, [postId]: false }));
+  };
+
+  const deleteComment = async (commentId: string, postId: string) => {
+    try {
+      const res = await fetch(`/api/social-posts/comments/${commentId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (res.ok) {
+        setPostComments((p) => ({ ...p, [postId]: (p[postId] || []).filter((c) => c.id !== commentId) }));
+        refetchSocialPosts();
+      }
+    } catch {}
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: true });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+        cameraVideoRef.current.play();
+      }
+      recordedChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        const file = new File([blob], `clip-${Date.now()}.webm`, { type: 'video/webm' });
+        setClipFile(file);
+        setClipVideoPreview(URL.createObjectURL(blob));
+        stream.getTracks().forEach(t => t.stop());
+        cameraStreamRef.current = null;
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(1000);
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          if (prev >= 59) {
+            mediaRecorderRef.current?.stop();
+            setIsRecording(false);
+            if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+            return 60;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      toast({ title: "Camera access denied", description: "Please allow camera access to record clips.", variant: "destructive" });
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setIsRecording(false);
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+  };
+
+  const resetClipDialog = () => {
+    setClipTitle("");
+    setClipFile(null);
+    if (clipVideoPreview) URL.revokeObjectURL(clipVideoPreview);
+    setClipVideoPreview(null);
+    setIsRecording(false);
+    setRecordingTime(0);
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(t => t.stop());
+      cameraStreamRef.current = null;
+    }
+  };
+
+  const uploadClip = async () => {
+    if (!clipFile || !clipTitle.trim()) return;
+    if (clipFile.size > 50 * 1024 * 1024) {
+      toast({ title: "File too large", description: "Max file size is 50MB.", variant: "destructive" });
+      return;
+    }
+    setIsClipUploading(true);
+    try {
+      const urlRes = await fetch("/api/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: clipFile.name, size: clipFile.size, contentType: clipFile.type }),
+      });
+      if (!urlRes.ok) throw new Error("Failed to get upload URL");
+      const { uploadURL, objectPath } = await urlRes.json();
+      const uploadRes = await fetch(uploadURL, { method: "PUT", body: clipFile, headers: { "Content-Type": clipFile.type } });
+      if (!uploadRes.ok) throw new Error("Failed to upload file");
+      const clipRes = await fetch("/api/clips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ title: clipTitle, videoUrl: objectPath, duration: recordingTime || null }),
+      });
+      if (!clipRes.ok) throw new Error("Failed to create clip");
+      toast({ title: t("social.clip_uploaded") });
+      setShowClipUploadDialog(false);
+      resetClipDialog();
+      refetchClips();
+    } catch (error: any) {
+      toast({ title: "Upload failed", description: error.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setIsClipUploading(false);
+    }
+  };
+
   // Merge purchased songs from entitlements with uploaded items from API
   const allLibraryItems = useMemo(() => {
     const purchasedItems: LibraryItem[] = entitlementsData
@@ -840,12 +1105,12 @@ export default function ExplorePage() {
             <TooltipTrigger asChild>
               {user ? (
                 <span className="text-[15px] tracking-[0.18em] cursor-default block" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
-                  AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
+                  AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR
                 </span>
               ) : (
                 <Link href="/" data-testid="link-explore-home">
                   <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
-                    AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
+                    AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR
                   </span>
                 </Link>
               )}
@@ -866,18 +1131,18 @@ export default function ExplorePage() {
                 onClick={() => setTab(item.id)}
                 data-testid={`tab-${item.id}`}
                 className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all duration-200 group relative ${
-                  isActive ? 'bg-[#F4BE44]/10 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30'
+                  isActive ? 'bg-accent/10 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30'
                 }`}
               >
                 <Icon
                   size={18}
-                  className={`transition-colors duration-200 ${isActive ? 'text-[#F4BE44]' : 'group-hover:text-zinc-300'}`}
+                  className={`transition-colors duration-200 ${isActive ? 'text-accent' : 'group-hover:text-zinc-300'}`}
                 />
                 <span className="text-sm font-bold tracking-tight">{item.label}</span>
                 {item.id === 'live' && isActive && (
                   <span className="absolute top-2 right-3 flex h-1.5 w-1.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F4BE44] opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#F4BE44]"></span>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-accent"></span>
                   </span>
                 )}
               </button>
@@ -921,7 +1186,7 @@ export default function ExplorePage() {
                 onClick={() => setTab(item.id)}
                 data-testid={`tab-mobile-${item.id}`}
                 className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all ${
-                  isActive ? 'text-[#F4BE44]' : 'text-zinc-500'
+                  isActive ? 'text-accent' : 'text-zinc-500'
                 }`}
               >
                 <Icon size={20} />
@@ -936,7 +1201,7 @@ export default function ExplorePage() {
         <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/30 bg-[#0a0a0b]/80 backdrop-blur-md shrink-0">
           <div className="md:hidden">
             <span className="text-[13px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo-mobile">
-              AFRO<span className="text-[#22D3EE] mx-[5px]">•</span>KAVIAR
+              AFRO<span className="text-primary mx-[3px]">•</span>KAVIAR
             </span>
           </div>
           <div className="relative flex-1 max-w-xl mx-auto">
@@ -950,6 +1215,47 @@ export default function ExplorePage() {
             />
           </div>
           <div className="flex items-center gap-3 ml-4">
+            <div className="relative" ref={themePanelRef}>
+              <button
+                onClick={() => setShowThemePanel(!showThemePanel)}
+                className="h-9 w-9 rounded-full flex items-center justify-center bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
+                data-testid="button-theme-toggle"
+              >
+                <Palette size={15} />
+              </button>
+              {showThemePanel && (
+                <div className="absolute right-0 top-12 z-50 w-48 bg-zinc-900 border border-zinc-700/60 rounded-xl shadow-2xl p-3 space-y-3">
+                  <div className="space-y-1.5">
+                    {(["cyan-gold", "ember-warm", "sage-earth"] as ColorTheme[]).map((theme) => (
+                      <button
+                        key={theme}
+                        onClick={() => { setColorTheme(theme); setShowThemePanel(false); }}
+                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-bold transition-all ${
+                          colorTheme === theme ? "bg-white/15 text-white" : "text-zinc-400 hover:text-white hover:bg-white/5"
+                        }`}
+                        data-testid={`button-header-theme-${theme}`}
+                      >
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: THEME_PREVIEW[theme].primary }} />
+                          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: THEME_PREVIEW[theme].accent }} />
+                        </div>
+                        <span>{theme.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" & ")}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="border-t border-zinc-700/40 pt-2">
+                    <button
+                      onClick={() => { toggleMode(); setShowThemePanel(false); }}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-bold text-zinc-400 hover:text-white hover:bg-white/5 transition-all"
+                      data-testid="button-header-mode-toggle"
+                    >
+                      {mode === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+                      <span>{mode === "dark" ? "Light Mode" : "Dark Mode"}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               onClick={toggleLang}
               className="h-9 px-3 rounded-full text-xs font-bold bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
@@ -992,7 +1298,7 @@ export default function ExplorePage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-9 px-3 text-[#22D3EE]/70 bg-[#22D3EE]/10 hover:text-white hover:bg-[#22D3EE]"
+                  className="h-9 px-3 text-primary/70 bg-primary/10 hover:text-white hover:bg-primary"
                   data-testid="button-admin"
                 >
                   <Shield className="mr-2 h-4 w-4" />
@@ -1014,7 +1320,7 @@ export default function ExplorePage() {
 
                 <TabsContent value="radio-tv" className="mt-0">
                   <div className="grid gap-6 lg:grid-cols-5">
-                    <div className="lg:col-span-3 text-white">
+                    <div className="lg:col-span-3 text-white" ref={tvPlayerRef}>
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="font-display text-lg text-white" data-testid="text-player-title">
@@ -1042,8 +1348,19 @@ export default function ExplorePage() {
                               <RotateCcw className="w-4 h-4" />
                             </button>
                             <button
+                              onClick={() => {
+                                if (videoRef.current) { videoRef.current.pause(); videoRef.current.muted = true; }
+                                setIsTheaterMode(true);
+                              }}
+                              className="p-2 rounded-lg transition-all bg-white/5 text-white/55 hover:bg-white/10 hover:text-white"
+                              title="Theater Mode"
+                              data-testid="button-theater"
+                            >
+                              <Maximize2 className="w-4 h-4" />
+                            </button>
+                            <button
                               onClick={togglePiP}
-                              className={`p-2 rounded-lg transition-all ${isPiPActive ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-white/5 text-white/55 hover:bg-white/10 hover:text-white'}`}
+                              className={`p-2 rounded-lg transition-all ${isPiPActive ? 'bg-primary/20 text-primary' : 'bg-white/5 text-white/55 hover:bg-white/10 hover:text-white'}`}
                               title={isPiPActive ? "Exit Picture-in-Picture" : "Picture-in-Picture"}
                               data-testid="button-pip"
                             >
@@ -1121,8 +1438,8 @@ export default function ExplorePage() {
                         <div className="rounded-xl border border-white/10 p-3" data-testid="panel-radio">
                           <div className="w-full select-none">
                             <div className="flex items-center space-x-3 mb-5 px-2">
-                              <div className="p-1.5 bg-[#F4BE44]/10 rounded-lg">
-                                <RadioIcon className="w-4 h-4 text-[#F4BE44]" />
+                              <div className="p-1.5 bg-accent/10 rounded-lg">
+                                <RadioIcon className="w-4 h-4 text-accent" />
                               </div>
                               <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-zinc-500" data-testid="text-radio-title">
                                 Live Radio
@@ -1135,7 +1452,7 @@ export default function ExplorePage() {
                                 style={{ zIndex: 1 }}
                                 dangerouslySetInnerHTML={{ __html: radioEmbedCode }}
                               />
-                              <div className="absolute -top-16 -right-16 w-48 h-48 bg-[#F4BE44]/5 blur-[80px] pointer-events-none group-hover:bg-[#F4BE44]/10 transition-colors duration-1000" />
+                              <div className="absolute -top-16 -right-16 w-48 h-48 bg-accent/5 blur-[80px] pointer-events-none group-hover:bg-accent/10 transition-colors duration-1000" />
                               <div className="absolute top-6 right-4 z-10 flex items-center space-x-2">
                                 <span className="flex h-2 w-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.5)]" />
                                 <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">On Air</span>
@@ -1232,7 +1549,7 @@ export default function ExplorePage() {
                                     "w-full text-left px-3 py-3 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] " +
                                     (active ? "bg-white/5" : "")
                                   }
-                                  onClick={() => { setStreamError(null); setPlayingChannelId(c.id); }}
+                                  onClick={() => { setStreamError(null); setPlayingChannelId(c.id); setTimeout(() => { const el = tvPlayerRef.current; if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, 150); }}
                                   data-testid={`row-tv-channel-${c.id}`}
                                 >
                                   <div className="flex items-start justify-between gap-3">
@@ -1263,15 +1580,17 @@ export default function ExplorePage() {
                                           />
                                         </span>
                                       )}
-                                      <Badge
+                                      <div
                                         className={
-                                          "mt-0.5 border border-white/10 bg-black/30 text-white/70 " +
-                                          (active ? "" : "")
+                                          "flex items-center justify-center w-9 h-9 rounded-full transition-all " +
+                                          (active
+                                            ? "bg-accent text-black shadow-[0_0_12px_rgba(244,190,68,0.4)]"
+                                            : "bg-white/10 text-white hover:bg-accent hover:text-black hover:shadow-[0_0_12px_rgba(244,190,68,0.3)]")
                                         }
                                         data-testid={`badge-tv-active-${c.id}`}
                                       >
-                                        {active ? "Playing" : "Play"}
-                                      </Badge>
+                                        {active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                                      </div>
                                     </div>
                                   </div>
                                 </button>
@@ -1310,8 +1629,8 @@ export default function ExplorePage() {
 
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden mb-6">
                       <div className="px-6 py-8 text-center">
-                        <div className="inline-flex items-center justify-center w-16 h-16 bg-[#22D3EE]/10 rounded-full mb-4">
-                          <RadioIcon className="w-8 h-8 text-[#22D3EE]" />
+                        <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-4">
+                          <RadioIcon className="w-8 h-8 text-primary" />
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2">Coming Soon</h2>
                         <p className="text-zinc-400 text-sm max-w-md mx-auto">
@@ -1357,11 +1676,11 @@ export default function ExplorePage() {
                             </div>
 
                             <div className="flex items-center space-x-5 overflow-hidden">
-                              <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all relative overflow-hidden" data-testid={`img-live-thumb-${idx}`}>
-                                <RadioIcon className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
+                              <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all relative overflow-hidden" data-testid={`img-live-thumb-${idx}`}>
+                                <RadioIcon className="w-5 h-5 text-zinc-500 group-hover:text-primary transition-colors" />
                               </div>
                               <div className="flex flex-col min-w-0">
-                                <span className="font-bold text-white text-base truncate group-hover:text-[#22D3EE]/90 transition-colors" data-testid={`text-live-card-title-${idx}`}>
+                                <span className="font-bold text-white text-base truncate group-hover:text-primary/90 transition-colors" data-testid={`text-live-card-title-${idx}`}>
                                   {e.title}
                                 </span>
                                 <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-live-card-desc-${idx}`}>
@@ -1468,7 +1787,7 @@ export default function ExplorePage() {
                                       {String(index + 1).padStart(2, '0')}
                                     </span>
                                     <button 
-                                      className="absolute opacity-0 group-hover:opacity-100 bg-[#22D3EE] rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-[#06B6D4]"
+                                      className="absolute opacity-0 group-hover:opacity-100 bg-primary rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-primary/90"
                                       onClick={() => togglePlayMock(s.title)}
                                       data-testid={`button-song-play-${s.id}`}
                                     >
@@ -1478,21 +1797,21 @@ export default function ExplorePage() {
                                 </div>
 
                                 <div className="flex items-center space-x-5 overflow-hidden">
-                                  <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all  relative overflow-hidden" data-testid={`img-song-thumb-${s.id}`}>
+                                  <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all  relative overflow-hidden" data-testid={`img-song-thumb-${s.id}`}>
                                     {s.artworkUrl ? (
                                       <img src={s.artworkUrl} alt={s.title} className="w-full h-full object-cover" />
                                     ) : (
-                                      <Music className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
+                                      <Music className="w-5 h-5 text-zinc-500 group-hover:text-primary transition-colors" />
                                     )}
                                     <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
                                   </div>
                                   <div className="flex flex-col min-w-0">
                                     <div className="flex items-center gap-2">
-                                      <span className="font-bold text-white text-base truncate group-hover:text-[#22D3EE]/90 transition-colors" data-testid={`text-song-title-${s.id}`}>
+                                      <span className="font-bold text-white text-base truncate group-hover:text-primary/90 transition-colors" data-testid={`text-song-title-${s.id}`}>
                                         {s.title}
                                       </span>
                                       {isNew(s.createdAt) && (
-                                        <Badge className="bg-[#22D3EE]/20 text-[#22D3EE] border border-[#22D3EE]/30 text-[10px]" data-testid={`badge-song-new-${s.id}`}>
+                                        <Badge className="bg-primary/20 text-primary border border-primary/30 text-[10px]" data-testid={`badge-song-new-${s.id}`}>
                                           New
                                         </Badge>
                                       )}
@@ -1523,7 +1842,7 @@ export default function ExplorePage() {
 
                                 <div className="flex items-center space-x-2 justify-end pr-2">
                                   <button 
-                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${reaction === "up" ? 'text-[#22D3EE]' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${reaction === "up" ? 'text-primary' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
                                     aria-label={reaction === "up" ? "Remove thumbs up" : "Thumbs up"}
                                     onClick={() => {
                                       if (!isAuthenticated) {
@@ -1551,7 +1870,7 @@ export default function ExplorePage() {
                                     <ThumbsDown className={`w-4 h-4 ${reaction === "down" ? 'fill-current' : ''}`} />
                                   </button>
                                   <button 
-                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${fav ? 'text-[#22D3EE]' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${fav ? 'text-primary' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
                                     aria-label={fav ? "Remove from favourites" : "Add to favourites"}
                                     onClick={() => {
                                       if (!isAuthenticated) {
@@ -1574,7 +1893,7 @@ export default function ExplorePage() {
                                     </button>
                                   ) : isPaid ? (
                                     <button
-                                      className="px-3 py-1.5 text-xs font-bold rounded-full bg-[#22D3EE] text-black hover:bg-[#06B6D4] transition-all transform active:scale-95"
+                                      className="px-3 py-1.5 text-xs font-bold rounded-full bg-primary text-black hover:bg-primary/90 transition-all transform active:scale-95"
                                       data-testid={`button-song-buy-${s.id}`}
                                       disabled={purchaseSongMutation.isPending}
                                       onClick={() => {
@@ -1597,7 +1916,7 @@ export default function ExplorePage() {
                                     </button>
                                   ) : (
                                     <button
-                                      className="px-3 py-1.5 text-xs font-bold rounded-full bg-zinc-700 text-white hover:bg-zinc-600 transition-all transform active:scale-95"
+                                      className="px-3 py-1.5 text-xs font-bold rounded-full bg-accent text-black hover:bg-accent/80 transition-all transform active:scale-95"
                                       data-testid={`button-song-addlibrary-${s.id}`}
                                       disabled={addFreeSongMutation.isPending}
                                       onClick={() => {
@@ -1609,6 +1928,25 @@ export default function ExplorePage() {
                                       }}
                                     >
                                       {addFreeSongMutation.isPending ? "..." : "Add to Library"}
+                                    </button>
+                                  )}
+                                  {isAdmin && (
+                                    <button
+                                      className="p-1.5 rounded-full text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-all hover:scale-110"
+                                      data-testid={`button-song-delete-${s.id}`}
+                                      onClick={async () => {
+                                        if (!confirm("Delete this song from the Music section?")) return;
+                                        try {
+                                          const res = await fetch(`/api/songs/${s.id}`, { method: "DELETE", credentials: "include" });
+                                          if (!res.ok) throw new Error();
+                                          toast({ title: "Song deleted" });
+                                          refetchSongs();
+                                        } catch {
+                                          toast({ title: "Failed to delete song", variant: "destructive" });
+                                        }
+                                      }}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                   )}
                                 </div>
@@ -1657,7 +1995,7 @@ export default function ExplorePage() {
                         onClick={() => setSocialView("posts")}
                         className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
                           socialView === "posts"
-                            ? "bg-[#F4BE44] text-black"
+                            ? "bg-accent text-black"
                             : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
                         }`}
                         data-testid="button-social-posts"
@@ -1668,19 +2006,30 @@ export default function ExplorePage() {
                         onClick={() => setSocialView("tracks")}
                         className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
                           socialView === "tracks"
-                            ? "bg-[#F4BE44] text-black"
+                            ? "bg-accent text-black"
                             : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
                         }`}
                         data-testid="button-social-tracks"
                       >
                         {t("social.tracks")}
                       </button>
+                      <button
+                        onClick={() => setSocialView("clips")}
+                        className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
+                          socialView === "clips"
+                            ? "bg-accent text-black"
+                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                        }`}
+                        data-testid="button-social-clips"
+                      >
+                        {t("social.clips")}
+                      </button>
                     </div>
 
                     {isAuthenticated && mySubmissions.length > 0 && (
                       <div className="mb-6 bg-[#121214] rounded-2xl border border-zinc-800/60 p-4">
                         <div className="flex items-center gap-2 mb-3">
-                          <Upload className="w-4 h-4 text-[#22D3EE]" />
+                          <Upload className="w-4 h-4 text-primary" />
                           <span className="text-sm font-bold text-white">{t("social.my_submissions")}</span>
                         </div>
                         <div className="space-y-2">
@@ -1726,7 +2075,7 @@ export default function ExplorePage() {
                       </div>
                     )}
 
-                    {socialView === "posts" ? (
+                    {socialView === "posts" && (
                       <div className="max-w-3xl mx-auto space-y-8">
                         {isAuthenticated && (
                           <div className="bg-[#121214] border border-zinc-800/80 rounded-[2rem] p-6 shadow-2xl" data-testid="social-post-composer">
@@ -1761,7 +2110,7 @@ export default function ExplorePage() {
                                 )}
                                 {postAudioFile && (
                                   <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-zinc-900 rounded-xl border border-zinc-800/50">
-                                    <Music className="w-4 h-4 text-[#F4BE44]" />
+                                    <Music className="w-4 h-4 text-accent" />
                                     <span className="text-sm text-zinc-300 truncate flex-1">{postAudioFile.name}</span>
                                     <button
                                       className="text-zinc-500 hover:text-white transition-colors"
@@ -1837,7 +2186,7 @@ export default function ExplorePage() {
                                   <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.image")}</span>
                                 </button>
                                 <button 
-                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-[#F4BE44]"
+                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-accent"
                                   onClick={() => postAudioInputRef.current?.click()}
                                   data-testid="button-post-audio"
                                 >
@@ -1854,7 +2203,7 @@ export default function ExplorePage() {
                                 </button>
                               </div>
                               <button 
-                                className="bg-[#F4BE44] hover:bg-[#ffcf66] text-black px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-[#F4BE44]/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="bg-accent hover:bg-accent/80 text-black px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
                                 data-testid="button-post-submit"
                                 disabled={isPostSubmitting || (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile)}
                                 onClick={async () => {
@@ -1992,6 +2341,20 @@ export default function ExplorePage() {
                                   </p>
                                 )}
 
+                                {post.textContent && extractYouTubeId(post.textContent) && (
+                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
+                                    <div className="aspect-video">
+                                      <iframe
+                                        src={`https://www.youtube.com/embed/${extractYouTubeId(post.textContent!)}?rel=0`}
+                                        className="w-full h-full"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowFullScreen
+                                        data-testid={`youtube-embed-${post.id}`}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
                                 {post.imageUrl && (
                                   <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
                                     <img src={post.imageUrl} alt="" className="w-full max-h-[500px] object-cover" data-testid={`img-post-image-${post.id}`} />
@@ -2017,7 +2380,7 @@ export default function ExplorePage() {
                                           setSocialPlayingId(isSocialPlaying ? null : post.id);
                                           if (!isSocialPlaying && audioRef.current) {
                                             audioRef.current.src = post.audioUrl!;
-                                            audioRef.current.play();
+                                            audioRef.current.play().catch(() => {});
                                           } else if (audioRef.current) {
                                             audioRef.current.pause();
                                           }
@@ -2038,7 +2401,7 @@ export default function ExplorePage() {
                                       <div>
                                         <p className="font-black text-white text-base tracking-tight">{post.audioTitle || "Audio"}</p>
                                         <div className="flex items-center space-x-2 text-xs font-bold text-zinc-500">
-                                          <span className="text-[#F4BE44]">Audio</span>
+                                          <span className="text-accent">Audio</span>
                                           {post.audioDuration && (
                                             <>
                                               <span className="w-1 h-1 rounded-full bg-zinc-800" />
@@ -2080,7 +2443,11 @@ export default function ExplorePage() {
                                       <Heart className={`w-5 h-5 ${liked ? 'fill-current' : ''}`} />
                                       <span>{post.likesCount}</span>
                                     </button>
-                                    <button className="flex items-center space-x-2 text-zinc-500 hover:text-white font-bold text-sm transition-colors" data-testid={`button-post-comment-${post.id}`}>
+                                    <button 
+                                      className={`flex items-center space-x-2 font-bold text-sm transition-colors ${expandedComments[post.id] ? 'text-[var(--color-accent)]' : 'text-zinc-500 hover:text-white'}`}
+                                      onClick={() => toggleComments(post.id)}
+                                      data-testid={`button-post-comment-${post.id}`}
+                                    >
                                       <MessageCircle className="w-5 h-5" />
                                       <span>{post.commentsCount}</span>
                                     </button>
@@ -2098,6 +2465,68 @@ export default function ExplorePage() {
                                   </div>
                                 </div>
                               </div>
+
+                              {expandedComments[post.id] && (
+                                <div className="border-t border-zinc-800/60 px-6 md:px-8 py-4" data-testid={`comments-section-${post.id}`}>
+                                  <div className="flex items-center space-x-3 mb-4">
+                                    <input
+                                      type="text"
+                                      className="flex-1 bg-white/5 border border-zinc-800/60 rounded-full px-4 py-2.5 text-sm text-white placeholder:text-white/35 focus:outline-none focus:border-[var(--color-accent)]/50 transition-colors"
+                                      placeholder={t("social.write_comment") || "Write a comment..."}
+                                      value={commentTexts[post.id] || ""}
+                                      onChange={(e) => setCommentTexts((p) => ({ ...p, [post.id]: e.target.value }))}
+                                      onKeyDown={(e) => { if (e.key === "Enter") submitComment(post.id); }}
+                                      data-testid={`input-comment-${post.id}`}
+                                    />
+                                    <button
+                                      className="p-2.5 rounded-full bg-[var(--color-accent)] text-black hover:opacity-90 transition-opacity disabled:opacity-40"
+                                      onClick={() => submitComment(post.id)}
+                                      disabled={submittingComment[post.id] || !commentTexts[post.id]?.trim()}
+                                      data-testid={`button-submit-comment-${post.id}`}
+                                    >
+                                      <Send className="w-4 h-4" />
+                                    </button>
+                                  </div>
+
+                                  {loadingComments[post.id] ? (
+                                    <div className="text-center py-4 text-zinc-500 text-sm">{t("social.loading") || "Loading..."}</div>
+                                  ) : (postComments[post.id] || []).length === 0 ? (
+                                    <div className="text-center py-4 text-zinc-500 text-sm">{t("social.no_comments") || "No comments yet. Be the first!"}</div>
+                                  ) : (
+                                    <div className="space-y-3 max-h-64 overflow-y-auto scrollbar-custom">
+                                      {(postComments[post.id] || []).map((comment) => (
+                                        <div key={comment.id} className="flex items-start space-x-3 group" data-testid={`comment-${comment.id}`}>
+                                          <div className="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-400 shrink-0 overflow-hidden">
+                                            {comment.authorImage ? (
+                                              <img src={comment.authorImage} alt="" className="w-full h-full object-cover" />
+                                            ) : (
+                                              comment.authorName?.charAt(0)?.toUpperCase() || "?"
+                                            )}
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center space-x-2">
+                                              <span className="text-xs font-bold text-white/80">@{comment.authorHandle}</span>
+                                              <span className="text-[10px] text-zinc-600">
+                                                {new Date(comment.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                                              </span>
+                                              {comment.authorId === user?.id && (
+                                                <button
+                                                  className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all"
+                                                  onClick={() => deleteComment(comment.id, post.id)}
+                                                  data-testid={`button-delete-comment-${comment.id}`}
+                                                >
+                                                  <Trash2 className="w-3 h-3" />
+                                                </button>
+                                              )}
+                                            </div>
+                                            <p className="text-sm text-white/70 mt-0.5 break-words">{comment.textContent}</p>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </article>
                           );
                         })}
@@ -2110,7 +2539,9 @@ export default function ExplorePage() {
                           </div>
                         )}
                       </div>
-                    ) : (
+                    )}
+
+                    {socialView === "tracks" && (
                       <div className="max-w-3xl mx-auto space-y-4">
                         <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                           <span className="text-zinc-600">Total: {filteredSocial.length} tracks</span>
@@ -2172,7 +2603,7 @@ export default function ExplorePage() {
                                 >
                                   <Heart className={`w-4 h-4 ${saved ? 'fill-current' : ''}`} />
                                 </button>
-                                {user && user.id === t.uploadedBy && (
+                                {(user && (user.id === t.uploadedBy || isAdmin)) && (
                                   <button
                                     className="p-2.5 rounded-full text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-all hover:scale-110"
                                     data-testid={`button-social-track-delete-${t.id}`}
@@ -2200,6 +2631,114 @@ export default function ExplorePage() {
                           <div className="text-center py-16 text-zinc-500">
                             <Music2 className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
                             <p className="text-sm font-medium">{t("social.no_tracks")}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {socialView === "clips" && (
+                      <div className="max-w-3xl mx-auto space-y-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">
+                            <span className="text-zinc-600">Total: {clipsData.length} {t("social.total_clips")}</span>
+                          </div>
+                          <button
+                            className="flex items-center gap-2 bg-white hover:bg-zinc-200 text-black px-4 py-2 rounded-full font-bold text-sm transition-all active:scale-95"
+                            onClick={() => {
+                              if (!isAuthenticated) {
+                                toast({ title: t("social.sign_in_required"), description: "Please sign in to upload clips.", variant: "destructive" });
+                                return;
+                              }
+                              resetClipDialog();
+                              setShowClipUploadDialog(true);
+                            }}
+                            data-testid="button-upload-clip"
+                          >
+                            <Video className="w-4 h-4" />
+                            <span>{t("social.upload_clip")}</span>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {clipsData.map((clip) => (
+                            <div key={clip.id} className="bg-black/40 rounded-2xl border border-zinc-800/50 overflow-hidden group hover:border-zinc-700/50 transition-all" data-testid={`card-clip-${clip.id}`}>
+                              <div className="aspect-video bg-black relative">
+                                <video
+                                  src={clip.videoUrl}
+                                  className="w-full h-full object-cover"
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                  data-testid={`video-clip-${clip.id}`}
+                                />
+                                {clip.duration && (
+                                  <span className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-0.5 rounded-full font-mono">
+                                    {Math.floor(clip.duration / 60)}:{String(clip.duration % 60).padStart(2, '0')}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <h3 className="font-bold text-white text-sm truncate" data-testid={`text-clip-title-${clip.id}`}>{clip.title}</h3>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      {clip.author?.profileImageUrl ? (
+                                        <img src={clip.author.profileImageUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                                      ) : (
+                                        <div className="w-5 h-5 rounded-full bg-zinc-800 flex items-center justify-center">
+                                          <User className="w-3 h-3 text-zinc-500" />
+                                        </div>
+                                      )}
+                                      <span className="text-xs text-zinc-400">@{clip.author?.handle || "user"}</span>
+                                      <span className="text-xs text-zinc-600">&bull;</span>
+                                      <span className="text-xs text-zinc-500">{formatAge(new Date(clip.createdAt).getTime())}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                    <button
+                                      className={`p-1.5 rounded-full transition-all ${clipLikes[clip.id] ? 'text-red-500' : 'text-zinc-500 hover:text-white'}`}
+                                      onClick={async () => {
+                                        if (!isAuthenticated) return;
+                                        const liked = clipLikes[clip.id];
+                                        setClipLikes(p => ({ ...p, [clip.id]: !liked }));
+                                        try {
+                                          await fetch(`/api/clips/${clip.id}/like`, { method: liked ? "DELETE" : "POST", credentials: "include" });
+                                          refetchClips();
+                                        } catch { setClipLikes(p => ({ ...p, [clip.id]: liked })); }
+                                      }}
+                                      data-testid={`button-clip-like-${clip.id}`}
+                                    >
+                                      <Heart className={`w-4 h-4 ${clipLikes[clip.id] ? 'fill-current' : ''}`} />
+                                    </button>
+                                    <span className="text-xs text-zinc-500">{clip.likesCount}</span>
+                                    {user && user.id === clip.authorId && (
+                                      <button
+                                        className="p-1.5 rounded-full text-zinc-500 hover:text-red-400 transition-all ml-1"
+                                        onClick={async () => {
+                                          if (!confirm("Delete this clip?")) return;
+                                          try {
+                                            await fetch(`/api/clips/${clip.id}`, { method: "DELETE", credentials: "include" });
+                                            toast({ title: "Clip deleted" });
+                                            refetchClips();
+                                          } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
+                                        }}
+                                        data-testid={`button-clip-delete-${clip.id}`}
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {clipsData.length === 0 && (
+                          <div className="text-center py-16 text-zinc-500">
+                            <Video className="w-10 h-10 mx-auto mb-3 text-zinc-600" />
+                            <p className="text-sm font-medium">{t("social.no_clips")}</p>
+                            <p className="text-xs text-zinc-600 mt-1">{t("social.clip_desc")}</p>
                           </div>
                         )}
                       </div>
@@ -2259,7 +2798,7 @@ export default function ExplorePage() {
                         <span className="text-zinc-600">Total: {filteredLibrary.length} items</span>
                         {storageData && (
                           <span className={`${isStorageFull && !isAdmin ? 'text-red-400' : 'text-zinc-600'}`} data-testid="text-storage-used">
-                            Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'} ({isAdmin ? '∞' : <span className="text-[#F4BE44]">{storagePercent}%</span>})
+                            Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'} ({isAdmin ? '∞' : <span className="text-accent">{storagePercent}%</span>})
                           </span>
                         )}
                       </div>
@@ -2273,7 +2812,7 @@ export default function ExplorePage() {
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center space-x-4">
                           <div className="w-14 h-14 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 ">
-                            <Music className="w-6 h-6 text-[#22D3EE]" />
+                            <Music className="w-6 h-6 text-primary" />
                           </div>
                           <div>
                             <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500" data-testid="text-library-nowplaying-label">
@@ -2285,7 +2824,7 @@ export default function ExplorePage() {
                           </div>
                         </div>
                         <button
-                          className={`p-3 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-[#22D3EE] text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
+                          className={`p-3 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-primary text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
                           data-testid="button-library-toggleplay"
                           onClick={() => {
                             if (audioRef.current) {
@@ -2302,7 +2841,7 @@ export default function ExplorePage() {
                           {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                         </button>
                       </div>
-                      <audio ref={audioRef} />
+                      <audio ref={audioRef} onEnded={() => setIsPlaying(false)} />
                     </div>
 
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
@@ -2330,6 +2869,7 @@ export default function ExplorePage() {
                                 const cat = getFileCategory(item.contentType);
                                 if (cat === "audio" || !item.objectPath) {
                                   setNowPlaying(item.title);
+                                  setNowPlayingId(item.id);
                                   setIsPlaying(true);
                                   if (item.objectPath && audioRef.current) {
                                     audioRef.current.src = item.objectPath;
@@ -2341,35 +2881,41 @@ export default function ExplorePage() {
                               }}
                             >
                               <div className="flex justify-center">
-                                <div className="relative w-9 h-9 flex items-center justify-center">
-                                  <span className="absolute text-zinc-500 group-hover:opacity-0 transition-opacity font-bold font-mono text-sm">
-                                    {String(index + 1).padStart(2, '0')}
-                                  </span>
-                                  <button 
-                                    className="absolute opacity-0 group-hover:opacity-100 bg-[#22D3EE] rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-[#06B6D4]"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
+                                <button
+                                  className="relative w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent/10 transition-all"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const isThisPlaying = nowPlayingId === item.id && isPlaying;
+                                    if (isThisPlaying) {
+                                      audioRef.current?.pause();
+                                      setIsPlaying(false);
+                                    } else {
                                       setNowPlaying(item.title);
+                                      setNowPlayingId(item.id);
                                       setIsPlaying(true);
                                       if (audioRef.current && item.objectPath) {
                                         audioRef.current.src = item.objectPath;
                                         audioRef.current.play().catch(() => {});
                                       }
-                                    }}
-                                    data-testid={`button-library-play-${item.id}`}
-                                  >
-                                    <Play className="w-4 h-4 fill-current ml-0.5" />
-                                  </button>
-                                </div>
+                                    }
+                                  }}
+                                  data-testid={`button-library-play-${item.id}`}
+                                >
+                                  {nowPlayingId === item.id && isPlaying ? (
+                                    <Pause className="w-4 h-4 text-accent transition-all duration-300" />
+                                  ) : (
+                                    <Music className={`w-4 h-4 transition-all duration-300 ${nowPlayingId === item.id ? 'text-accent' : 'text-zinc-500 group-hover:text-accent'}`} style={{ animation: nowPlayingId === item.id ? 'pulse 2s ease-in-out infinite' : 'none' }} />
+                                  )}
+                                </button>
                               </div>
 
                               <div className="flex items-center space-x-5 overflow-hidden">
-                                <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-[#22D3EE]/30 transition-all  relative overflow-hidden" data-testid={`img-library-thumb-${item.id}`}>
-                                  <FileCategoryIcon category={getFileCategory(item.contentType)} className="w-5 h-5 text-zinc-500 group-hover:text-[#22D3EE] transition-colors" />
+                                <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all  relative overflow-hidden" data-testid={`img-library-thumb-${item.id}`}>
+                                  <FileCategoryIcon category={getFileCategory(item.contentType)} className="w-5 h-5 text-zinc-500 group-hover:text-primary transition-colors" />
                                   <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
                                 </div>
                                 <div className="flex flex-col min-w-0">
-                                  <span className="font-bold text-white text-base truncate group-hover:text-[#22D3EE]/90 transition-colors" data-testid={`text-library-title-${item.id}`}>
+                                  <span className="font-bold text-white text-base truncate group-hover:text-primary/90 transition-colors" data-testid={`text-library-title-${item.id}`}>
                                     {item.title}
                                   </span>
                                   <div className="flex items-center space-x-2">
@@ -2393,7 +2939,7 @@ export default function ExplorePage() {
 
                               <div className="hidden md:block px-4">
                                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                                  item.kind === 'purchase' ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 
+                                  item.kind === 'purchase' ? 'bg-primary/20 text-primary' : 
                                   item.kind === 'free' ? 'bg-green-500/20 text-green-400' :
                                   'bg-zinc-800 text-zinc-400'
                                 }`} data-testid={`text-library-kind-${item.id}`}>
@@ -2404,7 +2950,7 @@ export default function ExplorePage() {
                               <div className="flex items-center space-x-2 justify-end pr-2">
                                 {item.objectPath && getFileCategory(item.contentType) !== "audio" && (
                                   <button 
-                                    className="p-2.5 text-zinc-500 hover:text-[#22D3EE] rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                    className="p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
                                     aria-label="Open"
                                     onClick={(e) => { e.stopPropagation(); setViewingItem(item); }}
                                     data-testid={`button-library-view-${item.id}`}
@@ -2413,7 +2959,7 @@ export default function ExplorePage() {
                                   </button>
                                 )}
                                 <button 
-                                  className="p-2.5 text-zinc-500 hover:text-[#22D3EE] rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                  className="p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
                                   aria-label="Like"
                                   onClick={(e) => e.stopPropagation()}
                                   data-testid={`button-library-like-${item.id}`}
@@ -2434,19 +2980,19 @@ export default function ExplorePage() {
 
           <footer className="mx-auto w-full max-w-6xl px-6 pb-10 text-xs text-white/45" data-testid="text-explore-footer">
             {tab === "radio-tv" && (
-              <span className="text-[#22D3EE]">Radio and TV will always be free. It's Universal Culture.</span>
+              <span className="text-primary">Radio and TV will always be free. It's Universal Culture.</span>
             )}
             {tab === "live" && (
-              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Some events will be offered $10, many will be free.</span></>
+              <>Payments processed securely via Stripe. <span className="text-primary">Some events will be offered $10, many will be free.</span></>
             )}
             {tab === "social" && (
-              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">Sell Your Songs for $1, Request them to be added to the Music section.</span></>
+              <>Payments processed securely via Stripe. <span className="text-primary">Sell Your Songs for $1, Request them to be added to the Music section.</span></>
             )}
             {tab === "music" && (
-              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">All Songs are $1 and stored in My Library.</span></>
+              <>Payments processed securely via Stripe. <span className="text-primary">All Songs are $1 and stored in My Library.</span></>
             )}
             {tab === "library" && (
-              <>Payments processed securely via Stripe. <span className="text-[#22D3EE]">My Library 50GB storage — $5/mo or $50/yr.</span></>
+              <>Payments processed securely via Stripe. <span className="text-primary">200MB free storage. Upgrade for more storage — $5/mo or $50/yr.</span></>
             )}
           </footer>
         </div>
@@ -2478,7 +3024,7 @@ export default function ExplorePage() {
               <div className="border-2 border-dashed border-zinc-700 rounded-lg p-6 text-center hover:border-zinc-600 transition-colors cursor-pointer"
                 onClick={() => document.getElementById('social-file-input')?.click()}>
                 {uploadFile ? (
-                  <div className="text-sm text-[#22D3EE] font-medium">{uploadFile.name}</div>
+                  <div className="text-sm text-primary font-medium">{uploadFile.name}</div>
                 ) : (
                   <div className="text-sm text-zinc-500">Click to select an audio file (MP3, WAV, etc.)</div>
                 )}
@@ -2573,10 +3119,125 @@ export default function ExplorePage() {
                   setIsUploading(false);
                 }
               }}
-              className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90 font-bold"
+              className="bg-primary text-black hover:bg-primary/90 font-bold"
               data-testid="button-social-upload-submit"
             >
               {isUploading ? "Uploading..." : "Upload Track"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clip Upload Dialog */}
+      <Dialog open={showClipUploadDialog} onOpenChange={(open) => { if (!open) { resetClipDialog(); } setShowClipUploadDialog(open); }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-white max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">{t("social.upload_clip")}</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              {t("social.clip_desc")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="clip-title" className="text-sm text-zinc-300">Title</Label>
+              <Input
+                id="clip-title"
+                value={clipTitle}
+                onChange={(e) => setClipTitle(e.target.value)}
+                placeholder="Name your clip..."
+                className="bg-zinc-800 border-zinc-700 text-white"
+                data-testid="input-clip-title"
+              />
+            </div>
+
+            {clipVideoPreview ? (
+              <div className="space-y-2">
+                <Label className="text-sm text-zinc-300">Preview</Label>
+                <div className="relative rounded-lg overflow-hidden bg-black">
+                  <video src={clipVideoPreview} controls playsInline className="w-full aspect-video object-contain" data-testid="clip-preview-video" />
+                  <button
+                    onClick={() => { setClipFile(null); if (clipVideoPreview) URL.revokeObjectURL(clipVideoPreview); setClipVideoPreview(null); setRecordingTime(0); }}
+                    className="absolute top-2 right-2 p-1 bg-black/60 rounded-full text-white hover:bg-black/80"
+                    data-testid="button-clip-remove-preview"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : isRecording ? (
+              <div className="space-y-3">
+                <div className="relative rounded-lg overflow-hidden bg-black">
+                  <video ref={cameraVideoRef} autoPlay playsInline muted className="w-full aspect-video object-cover" data-testid="clip-camera-preview" />
+                  <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-white text-sm font-mono font-bold">{Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}</span>
+                    <span className="text-white/60 text-xs">/ 1:00</span>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-800">
+                    <div className="h-full bg-red-500 transition-all" style={{ width: `${(recordingTime / 60) * 100}%` }} />
+                  </div>
+                </div>
+                <Button onClick={stopRecording} variant="destructive" className="w-full font-bold" data-testid="button-clip-stop-recording">
+                  <Pause className="w-4 h-4 mr-2" />
+                  {t("social.stop_recording")} ({60 - recordingTime}s left)
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <Button onClick={startRecording} variant="outline" className="w-full border-zinc-700 text-white hover:bg-zinc-800 py-6" data-testid="button-clip-start-recording">
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center mb-1">
+                      <div className="w-4 h-4 rounded-full bg-red-500" />
+                    </div>
+                    <span className="font-bold">{t("social.start_recording")}</span>
+                    <span className="text-xs text-zinc-500">Max 1 minute</span>
+                  </div>
+                </Button>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-zinc-800" />
+                  <span className="text-xs text-zinc-500">{t("social.or_upload")}</span>
+                  <div className="flex-1 h-px bg-zinc-800" />
+                </div>
+                <div
+                  className="border-2 border-dashed border-zinc-700 rounded-lg p-4 text-center hover:border-zinc-600 transition-colors cursor-pointer"
+                  onClick={() => document.getElementById('clip-file-input')?.click()}
+                >
+                  <Upload className="w-5 h-5 mx-auto mb-1 text-zinc-500" />
+                  <div className="text-sm text-zinc-500">Select a video file (MP4, WebM)</div>
+                  <div className="text-xs text-zinc-600 mt-1">Max 50MB, up to 1 minute</div>
+                </div>
+                <input
+                  type="file"
+                  id="clip-file-input"
+                  accept="video/mp4,video/webm"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      if (f.size > 50 * 1024 * 1024) {
+                        toast({ title: "File too large", description: "Max file size is 50MB.", variant: "destructive" });
+                        return;
+                      }
+                      setClipFile(f);
+                      setClipVideoPreview(URL.createObjectURL(f));
+                    }
+                  }}
+                  data-testid="input-clip-file"
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => { resetClipDialog(); setShowClipUploadDialog(false); }} className="text-zinc-400 hover:text-white hover:bg-zinc-800">
+              Cancel
+            </Button>
+            <Button
+              disabled={!clipTitle.trim() || !clipFile || isClipUploading}
+              onClick={uploadClip}
+              className="bg-primary text-black hover:bg-primary/90 font-bold"
+              data-testid="button-clip-upload-submit"
+            >
+              {isClipUploading ? "Uploading..." : t("social.upload_clip")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2600,7 +3261,7 @@ export default function ExplorePage() {
                 </div>
                 {!isAdmin && (
                   <div className="w-full bg-zinc-800 rounded-full h-1.5">
-                    <div className={`h-1.5 rounded-full transition-all ${storagePercent > 90 ? 'bg-red-400' : storagePercent > 70 ? 'bg-yellow-400' : 'bg-[#22D3EE]'}`} style={{ width: `${Math.min(storagePercent, 100)}%` }} />
+                    <div className={`h-1.5 rounded-full transition-all ${storagePercent > 90 ? 'bg-red-400' : storagePercent > 70 ? 'bg-yellow-400' : 'bg-primary'}`} style={{ width: `${Math.min(storagePercent, 100)}%` }} />
                   </div>
                 )}
               </div>
@@ -2622,8 +3283,8 @@ export default function ExplorePage() {
                 onClick={() => document.getElementById('library-file-input')?.click()}>
                 {uploadFile ? (
                   <div className="flex items-center justify-center space-x-2">
-                    <FileCategoryIcon category={getFileCategory(uploadFile.type)} className="w-5 h-5 text-[#22D3EE]" />
-                    <span className="text-sm text-[#22D3EE] font-medium">{uploadFile.name}</span>
+                    <FileCategoryIcon category={getFileCategory(uploadFile.type)} className="w-5 h-5 text-primary" />
+                    <span className="text-sm text-primary font-medium">{uploadFile.name}</span>
                     <span className="text-xs text-zinc-500">({formatBytes(uploadFile.size)})</span>
                   </div>
                 ) : (
@@ -2631,12 +3292,9 @@ export default function ExplorePage() {
                     <Upload className="w-8 h-8 mx-auto text-zinc-600" />
                     <div className="text-sm text-zinc-500">Click to select a file</div>
                     <div className="text-[10px] text-zinc-600">
-                      Audio (MP3, M4A, WAV, FLAC) · Images (JPG, PNG, WEBP) · PDF
-                      {canUploadVideo ? " · Video (MP4, WEBM)" : ""}
+                      Audio (MP3, M4A, WAV, FLAC) · Images (JPG, PNG, WEBP) · Video (MP4, WEBM) · PDF
                     </div>
-                    {!canUploadVideo && (
-                      <div className="text-[10px] text-zinc-500 mt-1">Subscribe ($5/mo) to upload videos</div>
-                    )}
+                    <div className="text-[10px] text-zinc-500 mt-1">Max 50MB per file</div>
                   </div>
                 )}
               </div>
@@ -2644,10 +3302,14 @@ export default function ExplorePage() {
                 type="file" 
                 id="library-file-input"
                 className="hidden"
-                accept={canUploadVideo ? ACCEPTED_FILE_TYPES : ACCEPTED_NO_VIDEO}
+                accept={ACCEPTED_FILE_TYPES}
                 onChange={(e) => {
                   const file = e.target.files?.[0] || null;
                   if (file) {
+                    if (file.size > MAX_FILE_SIZE) {
+                      toast({ title: "File too large", description: "Max file size is 50MB.", variant: "destructive" });
+                      return;
+                    }
                     setUploadFile(file);
                     if (!uploadTitle.trim()) {
                       setUploadTitle(file.name.replace(/\.[^/.]+$/, ""));
@@ -2732,7 +3394,7 @@ export default function ExplorePage() {
                   setIsUploading(false);
                 }
               }}
-              className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90 font-bold"
+              className="bg-primary text-black hover:bg-primary/90 font-bold"
               data-testid="button-library-upload-submit"
             >
               {isUploading ? "Uploading..." : "Upload File"}
@@ -2883,7 +3545,7 @@ export default function ExplorePage() {
                   setIsMusicUploading(false);
                 }
               }}
-              className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90 font-bold"
+              className="bg-primary text-black hover:bg-primary/90 font-bold"
               data-testid="button-music-upload-submit"
             >
               {isMusicUploading ? "Uploading..." : "Upload Song"}
@@ -2896,7 +3558,7 @@ export default function ExplorePage() {
         <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col" data-testid="panel-file-viewer">
           <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
             <div className="flex items-center space-x-3">
-              <FileCategoryIcon category={getFileCategory(viewingItem.contentType)} className="w-5 h-5 text-[#22D3EE]" />
+              <FileCategoryIcon category={getFileCategory(viewingItem.contentType)} className="w-5 h-5 text-primary" />
               <span className="text-white font-bold text-lg">{viewingItem.title}</span>
               <span className="text-xs text-zinc-500 uppercase font-bold">{getFileCategory(viewingItem.contentType)}</span>
             </div>
@@ -2937,6 +3599,121 @@ export default function ExplorePage() {
           </div>
         </div>
       )}
+      <AnimatePresence>
+        {isTheaterMode && activeChannel && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) exitTheaterMode(); }}
+            data-testid="theater-overlay"
+          >
+            <div className="absolute inset-0 bg-black/92 backdrop-blur-md" />
+
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] opacity-20 blur-[120px] rounded-full"
+                style={{ background: 'radial-gradient(ellipse at center, hsl(var(--primary) / 0.3) 0%, transparent 70%)' }} />
+              <div className="absolute bottom-0 left-0 right-0 h-32 opacity-10"
+                style={{ background: 'linear-gradient(to top, hsl(var(--primary) / 0.2), transparent)' }} />
+            </div>
+
+            <motion.div
+              initial={{ scale: 0.85, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              transition={{ duration: 0.35, ease: [0.19, 1, 0.22, 1] }}
+              className="relative z-10 w-full max-w-4xl mx-4"
+              data-testid="theater-container"
+            >
+              <div className="flex items-center justify-between mb-3 px-1">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-xs font-medium text-white/80 tracking-wide uppercase">Live</span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-white" data-testid="theater-channel-name">{activeChannel.name}</div>
+                    <div className="text-xs text-white/50">{activeChannel.country} &bull; {activeChannel.channelGroup}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      const v = theaterVideoRef.current;
+                      if (v) v.currentTime = Math.max(0, v.currentTime - 20);
+                    }}
+                    className="p-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white transition-all"
+                    title="Rewind 20s"
+                    data-testid="theater-rewind"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => exitTheaterMode()}
+                    className="p-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white transition-all"
+                    title="Exit Theater (Esc)"
+                    data-testid="theater-close"
+                  >
+                    <Minimize2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => theaterVideoRef.current?.requestFullscreen?.()}
+                    className="p-2 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white transition-all"
+                    title="Fullscreen"
+                    data-testid="theater-fullscreen"
+                  >
+                    <Maximize2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="relative rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10"
+                style={{ boxShadow: '0 0 80px 10px hsl(var(--primary) / 0.08), 0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+                <div className="aspect-video bg-black">
+                  {streamError ? (
+                    <div className="flex h-full items-center justify-center">
+                      <div className="grid gap-3 text-center p-6">
+                        <div className="mx-auto h-12 w-12 rounded-full bg-red-500/20 flex items-center justify-center">
+                          <AlertCircle className="h-6 w-6 text-red-400" />
+                        </div>
+                        <div className="text-sm text-white/70">This channel is currently unavailable</div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 mx-auto bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                          onClick={() => { setStreamError(null); setPlayingChannelId(activeChannel.id); }}
+                          data-testid="theater-retry"
+                        >
+                          Try Again
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <video
+                      ref={theaterVideoRef}
+                      key={"theater-" + activeChannel.id + "-" + playingChannelId}
+                      className="h-full w-full"
+                      controls
+                      autoPlay
+                      playsInline
+                      onError={() => setStreamError("Stream failed to load")}
+                      data-testid="theater-video"
+                    >
+                      <source src={activeChannel.iptvUrl} />
+                    </video>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-3 flex justify-center">
+                <span className="text-[11px] text-white/30 tracking-wide">Press ESC or click outside to exit</span>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

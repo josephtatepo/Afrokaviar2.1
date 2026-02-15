@@ -14,6 +14,9 @@ import {
   Play,
   Pause,
   Music,
+  Users,
+  Crown,
+  Lock,
 } from "lucide-react";
 
 type FeaturedSong = {
@@ -39,6 +42,17 @@ export default function Home() {
     retry: false,
   });
   const featuredSong = featuredData?.song;
+
+  const { data: memberData } = useQuery<{ count: number }>({
+    queryKey: ["/api/member-count"],
+    retry: false,
+    refetchInterval: 30000,
+  });
+  const memberCount = memberData?.count || 0;
+  const totalSpots = 100;
+  const spotsRemaining = Math.max(0, totalSpots - memberCount);
+  const fillPercent = Math.min(100, (memberCount / totalSpots) * 100);
+  const isFull = memberCount >= totalSpots;
 
   const togglePlay = () => {
     if (!audioRef.current || !featuredSong) return;
@@ -71,20 +85,20 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-[#F4BE44]/30 overflow-x-hidden">
+    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-accent/30 overflow-x-hidden">
       
       {/* BACKGROUND ELEMENTS: Grid & Bokeh */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:60px_60px] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
         <div className="absolute top-[-10%] left-[-5%] w-[40%] h-[40%] bg-cyan-500/10 blur-[120px] rounded-full animate-pulse" />
-        <div className="absolute top-[20%] right-[-10%] w-[35%] h-[40%] bg-[#F4BE44]/10 blur-[120px] rounded-full animate-pulse delay-700" />
+        <div className="absolute top-[20%] right-[-10%] w-[35%] h-[40%] bg-accent/10 blur-[120px] rounded-full animate-pulse delay-700" />
       </div>
 
       {/* HEADER */}
       <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${isScrolled ? "py-4 bg-black/80 backdrop-blur-2xl border-b border-white/5" : "py-8"}`}>
         <div className="max-w-[1440px] mx-auto px-6 md:px-10 flex items-center justify-between">
           <Link href="/" className="flex items-center space-x-2" data-testid="link-brand">
-            <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }}>AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR</span>
+            <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }}>AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR</span>
           </Link>
           <div className="flex items-center space-x-4">
             <Link href="/explore" data-testid="link-enter">
@@ -108,7 +122,7 @@ export default function Home() {
           {/* Left side - Hero text */}
           <div className="flex-1 space-y-8">
             <div className="inline-flex items-center space-x-3 bg-zinc-900/50 backdrop-blur-md border border-white/10 rounded-full px-4 py-1.5" data-testid="badge-hero">
-              <Sparkles size={12} className="text-[#F4BE44]" />
+              <Sparkles size={12} className="text-accent" />
               <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Watch • Listen • Attend</span>
             </div>
 
@@ -123,10 +137,10 @@ export default function Home() {
 
           {/* Right side - Featured Song */}
           <div className="w-full lg:w-auto lg:min-w-[320px] lg:mt-12">
-            <div className="group bg-gradient-to-br from-[#0d0d0f]/80 to-[#1a1a1f]/60 backdrop-blur-xl border border-[#F4BE44]/20 rounded-[2rem] p-6 hover:border-[#F4BE44]/40 transition-all relative overflow-hidden" data-testid="card-featured-song">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[#F4BE44]/10 to-transparent rounded-full blur-2xl" />
+            <div className="group bg-gradient-to-br from-[#0d0d0f]/80 to-[#1a1a1f]/60 backdrop-blur-xl border border-accent/20 rounded-[2rem] p-6 hover:border-accent/40 transition-all relative overflow-hidden" data-testid="card-featured-song">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-accent/10 to-transparent rounded-full blur-2xl" />
               <div className="relative z-10">
-                <span className="text-[10px] font-black text-[#F4BE44] uppercase tracking-widest mb-3 block flex items-center gap-2">
+                <span className="text-[10px] font-black text-accent uppercase tracking-widest mb-3 block flex items-center gap-2">
                   <Music className="h-3 w-3" />
                   Featured Song
                 </span>
@@ -146,7 +160,7 @@ export default function Home() {
                   ) : (
                     <button
                       onClick={togglePlay}
-                      className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#22D3EE]/20 to-[#F4BE44]/20 flex items-center justify-center border border-white/10 group-hover:scale-105 transition-transform shrink-0 cursor-pointer"
+                      className="w-16 h-16 rounded-xl bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center border border-white/10 group-hover:scale-105 transition-transform shrink-0 cursor-pointer"
                       data-testid="button-featured-play"
                     >
                       {isPlaying ? <Pause className="h-6 w-6 text-white fill-white" /> : <Play className="h-6 w-6 text-white fill-white" />}
@@ -170,7 +184,7 @@ export default function Home() {
                     <>
                       <button
                         onClick={togglePlay}
-                        className="bg-[#F4BE44] text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all"
+                        className="bg-accent text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all"
                         data-testid="button-featured-listen"
                       >
                         {isPlaying ? "Pause" : "Listen Now"}
@@ -179,7 +193,7 @@ export default function Home() {
                     </>
                   ) : (
                     <Link href="/explore" data-testid="link-featured-song">
-                      <button className="bg-[#F4BE44] text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
+                      <button className="bg-accent text-black px-4 py-2 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all">
                         Explore
                       </button>
                     </Link>
@@ -204,14 +218,14 @@ export default function Home() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-20">
           
           {/* Card 1: Featured Drop */}
-          <div className="group bg-[#0d0d0f]/60 backdrop-blur-xl border border-white/5 rounded-[2rem] p-8 hover:border-[#F4BE44]/30 transition-all relative overflow-hidden" data-testid="card-featured-drop">
+          <div className="group bg-[#0d0d0f]/60 backdrop-blur-xl border border-white/5 rounded-[2rem] p-8 hover:border-accent/30 transition-all relative overflow-hidden" data-testid="card-featured-drop">
             <div className="relative z-10">
               <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 block" data-testid="text-featured-label">Featured Drop</span>
               <h3 className="text-2xl font-black mb-2" data-testid="text-featured-title">Paid Song Drop</h3>
               <p className="text-zinc-500 text-sm mb-8 leading-relaxed" data-testid="text-featured-desc">Preview 60s. Buy for $1 and keep it forever.</p>
               
               <div className="flex items-center space-x-2">
-                <button className="bg-[#F4BE44] text-black px-5 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all" data-testid="button-featured-play">
+                <button className="bg-accent text-black px-5 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all" data-testid="button-featured-play">
                   Play Preview
                 </button>
                 <button className="bg-white/5 text-white px-5 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest border border-white/10 hover:bg-white/10 transition-all" data-testid="button-featured-buy">
@@ -257,16 +271,102 @@ export default function Home() {
           <div className="bg-[#0d0d0f]/40 border border-white/5 rounded-2xl px-6 py-4 flex items-center space-x-6 max-w-2xl w-full">
             <button 
               onClick={generateRadioAura}
-              className="shrink-0 w-12 h-12 bg-white/5 rounded-xl flex items-center justify-center text-[#F4BE44] hover:bg-white/10 transition-all group"
+              className="shrink-0 w-12 h-12 bg-white/5 rounded-xl flex items-center justify-center text-accent hover:bg-white/10 transition-all group"
               data-testid="button-oracle"
             >
               {isGeneratingAura ? <Loader2 className="animate-spin" size={20} /> : <Sparkles size={20} className="group-hover:scale-110 transition-transform" />}
             </button>
             <div className="flex-1">
-              <div className="text-[9px] font-black text-[#F4BE44] uppercase tracking-widest mb-1">✨ Oracle Aura Decoder</div>
+              <div className="text-[9px] font-black text-accent uppercase tracking-widest mb-1">✨ Oracle Aura Decoder</div>
               <p className="text-xs text-zinc-500 italic font-medium" data-testid="text-oracle-aura">
                 {auraDescription || "Tap the oracle to decode the current cultural frequency."}
               </p>
+            </div>
+          </div>
+        </div>
+
+        {/* FOUNDATION MEMBERS */}
+        <div className="mt-20" data-testid="section-foundation-members">
+          <div className="bg-gradient-to-br from-[#0d0d0f]/80 to-[#111115]/60 backdrop-blur-xl border border-accent/20 rounded-[2rem] p-8 md:p-12 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-full">
+              <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[60%] bg-accent/5 blur-[100px] rounded-full" />
+              <div className="absolute bottom-[-20%] right-[-10%] w-[40%] h-[50%] bg-cyan-500/5 blur-[100px] rounded-full" />
+            </div>
+
+            <div className="relative z-10">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-accent/10 rounded-xl flex items-center justify-center">
+                  <Crown size={18} className="text-accent" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-accent uppercase tracking-widest block">Foundation Members</span>
+                  <span className="text-[10px] text-zinc-500 uppercase tracking-widest">First 100 Pioneers</span>
+                </div>
+              </div>
+
+              <h3 className="text-2xl md:text-3xl font-black mb-3" data-testid="text-foundation-title">
+                {isFull ? "The founding circle is complete." : "Be among the first 100."}
+              </h3>
+              <p className="text-zinc-500 text-sm md:text-base leading-relaxed max-w-xl mb-8" data-testid="text-foundation-desc">
+                {isFull
+                  ? "All 100 foundation spots have been claimed. New members join by invitation only from existing foundation members."
+                  : "The first 100 members shape the culture. Join as a Foundation Member and help define the future of the diaspora's digital home."}
+              </p>
+
+              {/* Progress bar */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                    <Users size={12} />
+                    {memberCount} / {totalSpots} spots claimed
+                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: isFull ? '#ef4444' : '#22d3ee' }}>
+                    {isFull ? "Full" : `${spotsRemaining} remaining`}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden" data-testid="progress-foundation-bar">
+                  <div
+                    className="h-full rounded-full transition-all duration-1000 ease-out"
+                    style={{
+                      width: `${fillPercent}%`,
+                      background: isFull
+                        ? 'linear-gradient(90deg, #ef4444, #dc2626)'
+                        : 'linear-gradient(90deg, #22d3ee, #F4BE44)',
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Spot indicators - visual dots */}
+              <div className="flex flex-wrap gap-1 mb-8 max-w-md" data-testid="foundation-spots-grid">
+                {Array.from({ length: Math.min(totalSpots, 100) }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                      i < memberCount
+                        ? "bg-accent shadow-[0_0_4px_rgba(244,190,68,0.4)]"
+                        : "bg-white/10"
+                    }`}
+                  />
+                ))}
+              </div>
+
+              {/* CTA */}
+              {isFull ? (
+                <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-5 py-3 w-fit" data-testid="badge-invitation-only">
+                  <Lock size={14} className="text-zinc-500" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                    Invitation only
+                  </span>
+                </div>
+              ) : (
+                <Link href="/auth" data-testid="link-foundation-join">
+                  <button className="bg-accent text-black px-8 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest hover:scale-105 transition-all shadow-lg shadow-accent/20 flex items-center gap-2" data-testid="button-foundation-join">
+                    <span>Claim Your Spot</span>
+                    <ArrowUpRight size={12} strokeWidth={3} />
+                  </button>
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -286,17 +386,17 @@ export default function Home() {
               <button
                 onClick={() => setActiveTab(item.id)}
                 className={`flex items-center space-x-3 px-4 sm:px-6 py-3.5 rounded-full transition-all duration-300 relative group
-                  ${activeTab === item.id ? "bg-[#F4BE44]/10" : "hover:bg-white/5"}
+                  ${activeTab === item.id ? "bg-accent/10" : "hover:bg-white/5"}
                 `}
               >
-                <item.icon size={18} className={activeTab === item.id ? "text-[#F4BE44]" : "text-zinc-500 group-hover:text-zinc-300"} />
+                <item.icon size={18} className={activeTab === item.id ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"} />
                 <span className={`text-[10px] font-black uppercase tracking-widest hidden lg:block
                   ${activeTab === item.id ? "text-white" : "text-zinc-500"}
                 `}>
                   {item.label}
                 </span>
                 {activeTab === item.id && (
-                  <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1 bg-[#F4BE44] rounded-full shadow-[0_0_10px_#F4BE44]" />
+                  <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1 bg-accent rounded-full shadow-[0_0_10px_#F4BE44]" />
                 )}
               </button>
             </Link>
@@ -308,7 +408,7 @@ export default function Home() {
       <div className="max-w-[1440px] mx-auto px-6 md:px-10 pb-32 pt-20 flex flex-col md:flex-row items-center justify-between text-[10px] font-black text-zinc-700 uppercase tracking-widest" data-testid="text-footer">
         <p>Dark mode by default. Neon Afro-tech highlights. Micro-interactions everywhere.</p>
         <div className="flex space-x-8 mt-4 md:mt-0">
-          <Link href="/blueprint" className="text-[#22D3EE] hover:text-[#22D3EE]/80 transition-colors" data-testid="link-footer-blueprint">
+          <Link href="/blueprint" className="text-primary hover:text-primary/80 transition-colors" data-testid="link-footer-blueprint">
             AFROKAVIAR BLUEPRINT
           </Link>
           <Link href="/privacy-policy" className="hover:text-zinc-400 transition-colors" data-testid="link-footer-privacy">

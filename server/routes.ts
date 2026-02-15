@@ -404,22 +404,16 @@ export async function registerRoutes(
         }
         
         if (!isAdminUser) {
-          if (ALLOWED_VIDEO.includes(contentType)) {
-            const user = await storage.getUser(req.user.id);
-            if (!user?.stripeSubscriptionId) {
-              return res.status(403).json({ message: "Subscription required to upload videos. Upgrade for $5/month." });
-            }
-            const subscription = await stripeService.getSubscription(user.stripeSubscriptionId);
-            if (subscription?.status !== "active") {
-              return res.status(403).json({ message: "Active subscription required to upload videos. Upgrade for $5/month." });
-            }
+          const MAX_FILE_SIZE = 50 * 1024 * 1024;
+          const newSize = fileSize || 0;
+          if (newSize > MAX_FILE_SIZE) {
+            return res.status(400).json({ message: "File size exceeds 50MB limit." });
           }
           
           const storageStats = await storage.getUserStorageStats(req.user.id);
-          const newSize = fileSize || 0;
           if (storageStats.usedBytes + newSize > storageStats.limitBytes) {
             return res.status(403).json({ 
-              message: "Storage limit reached (200MB free). Upgrade to upload more content.",
+              message: "Storage limit reached. Upgrade for more storage.",
               usedBytes: storageStats.usedBytes,
               limitBytes: storageStats.limitBytes,
             });
@@ -704,7 +698,13 @@ export async function registerRoutes(
 
   app.delete("/api/social-tracks/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const deleted = await storage.deleteSocialTrack(req.params.id, req.user.id);
+      const adminUser = await storage.getAdminUser(req.user.id);
+      let deleted: boolean;
+      if (adminUser) {
+        deleted = await storage.deleteSocialTrackAsAdmin(req.params.id);
+      } else {
+        deleted = await storage.deleteSocialTrack(req.params.id, req.user.id);
+      }
       if (!deleted) {
         return res.status(404).json({ message: "Track not found or not yours" });
       }
@@ -944,6 +944,150 @@ export async function registerRoutes(
     }
   });
 
+  // Social post comments
+  app.get("/api/social-posts/:id/comments", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const comments = await storage.getSocialPostComments(req.params.id, limit, offset);
+      const commentsWithAuthors = await Promise.all(
+        comments.map(async (comment) => {
+          const user = await storage.getUser(comment.authorId);
+          return {
+            ...comment,
+            authorHandle: user?.handle || user?.firstName || "user",
+            authorName: user?.firstName || user?.handle || "User",
+            authorImage: user?.profileImageUrl || null,
+          };
+        })
+      );
+      res.json(commentsWithAuthors);
+    } catch (error) {
+      console.error("Error fetching comments:", error);
+      res.status(500).json({ message: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/social-posts/:id/comments", isAuthenticated, async (req: any, res) => {
+    try {
+      const { textContent } = req.body;
+      if (!textContent || !textContent.trim()) {
+        return res.status(400).json({ message: "Comment text is required" });
+      }
+      const comment = await storage.createSocialPostComment({
+        postId: req.params.id,
+        authorId: req.user.id,
+        textContent: textContent.trim(),
+      });
+      const user = await storage.getUser(comment.authorId);
+      res.json({
+        ...comment,
+        authorHandle: user?.handle || user?.firstName || "user",
+        authorName: user?.firstName || user?.handle || "User",
+        authorImage: user?.profileImageUrl || null,
+      });
+    } catch (error) {
+      console.error("Error creating comment:", error);
+      res.status(500).json({ message: "Failed to create comment" });
+    }
+  });
+
+  app.delete("/api/social-posts/comments/:commentId", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteSocialPostComment(req.params.commentId, req.user.id);
+      if (deleted) {
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ message: "Comment not found or not authorized" });
+      }
+    } catch (error) {
+      console.error("Error deleting comment:", error);
+      res.status(500).json({ message: "Failed to delete comment" });
+    }
+  });
+
+  // ── Clips ──────────────────────────────────────────
+  app.get("/api/clips", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const clips = await storage.getClips(limit, offset);
+      const authorIds = Array.from(new Set(clips.map(c => c.authorId)));
+      const authors: Record<string, any> = {};
+      for (const id of authorIds) {
+        const u = await storage.getUser(id);
+        if (u) authors[id] = { id: u.id, handle: u.handle, profileImageUrl: u.profileImageUrl, firstName: u.firstName };
+      }
+      res.json(clips.map(c => ({ ...c, author: authors[c.authorId] || null })));
+    } catch (e) {
+      res.status(500).json({ error: "Failed to fetch clips" });
+    }
+  });
+
+  app.post("/api/clips", isAuthenticated, async (req: any, res) => {
+    try {
+      const { title, description, videoUrl, thumbnailUrl, duration } = req.body;
+      if (!title || typeof title !== "string" || title.trim().length === 0) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      if (!videoUrl || typeof videoUrl !== "string") {
+        return res.status(400).json({ error: "Video URL is required" });
+      }
+      if (duration !== undefined && duration !== null && (typeof duration !== "number" || duration > 60)) {
+        return res.status(400).json({ error: "Clip duration must be 60 seconds or less" });
+      }
+      const clip = await storage.createClip({
+        title: title.trim(),
+        description: description || null,
+        videoUrl,
+        thumbnailUrl: thumbnailUrl || null,
+        duration: duration || null,
+        authorId: req.user.id,
+      });
+      res.json(clip);
+    } catch (e) {
+      res.status(500).json({ error: "Failed to create clip" });
+    }
+  });
+
+  app.delete("/api/clips/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteClip(req.params.id, req.user.id);
+      if (!deleted) return res.status(404).json({ error: "Not found or unauthorized" });
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to delete clip" });
+    }
+  });
+
+  app.post("/api/clips/:id/like", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.likeClip(req.user.id, req.params.id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to like clip" });
+    }
+  });
+
+  app.delete("/api/clips/:id/like", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.unlikeClip(req.user.id, req.params.id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to unlike clip" });
+    }
+  });
+
+  app.get("/api/clips/likes", isAuthenticated, async (req: any, res) => {
+    try {
+      const clipIds = (req.query.clipIds as string || "").split(",").filter(Boolean);
+      const likes = await storage.getClipLikes(req.user.id, clipIds);
+      res.json(likes);
+    } catch (e) {
+      res.status(500).json({ error: "Failed to fetch clip likes" });
+    }
+  });
+
   // Create invite
   app.post("/api/invites", isAuthenticated, async (req: any, res) => {
     try {
@@ -1027,6 +1171,16 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error accepting invite:", error);
       res.status(500).json({ message: "Failed to accept invite" });
+    }
+  });
+
+  // Public member count for foundation members section
+  app.get("/api/member-count", async (req, res) => {
+    try {
+      const analytics = await storage.getAnalytics();
+      res.json({ count: analytics.registeredUsers });
+    } catch {
+      res.json({ count: 0 });
     }
   });
 

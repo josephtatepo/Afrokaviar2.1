@@ -305,7 +305,7 @@ export default function AdminStudio() {
           <div className="flex items-center gap-2">
             <span className="text-sm text-white/60">{userEmail}</span>
             <Badge
-              className="border border-[#22D3EE]/30 bg-[#22D3EE]/10 text-[#22D3EE] shadow-[0_0_18px_rgba(34,211,238,0.18)]"
+              className="border border-primary/30 bg-primary/10 text-primary shadow-lg shadow-primary/10"
               data-testid="badge-admin-access"
             >
               root admin
@@ -399,7 +399,7 @@ export default function AdminStudio() {
                       </Button>
                       <Button
                         size="sm"
-                        className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90"
+                        className="bg-primary text-black hover:bg-primary/90"
                         disabled={promoteMutation.isPending}
                         data-testid={`button-queue-promote-${q.id}`}
                         onClick={() => openPromoteDialog(q)}
@@ -487,16 +487,16 @@ export default function AdminStudio() {
             </div>
           </Card>
 
-          <Card className="rounded-2xl border border-[#F4BE44]/20 bg-white/5 p-5 text-white/80 backdrop-blur-md lg:col-span-3" data-testid="panel-featured-song">
+          <Card className="rounded-2xl border border-accent/20 bg-white/5 p-5 text-white/80 backdrop-blur-md lg:col-span-3" data-testid="panel-featured-song">
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
-                <Star className="h-5 w-5 text-[#F4BE44]" />
+                <Star className="h-5 w-5 text-accent" />
                 <div className="font-display text-xl text-white" data-testid="text-featured-panel-title">
                   Featured Song
                 </div>
               </div>
               {currentFeatured?.song && (
-                <Badge className="border border-[#F4BE44]/30 bg-[#F4BE44]/10 text-[#F4BE44]" data-testid="badge-current-featured">
+                <Badge className="border border-accent/30 bg-accent/10 text-accent" data-testid="badge-current-featured">
                   Live: {currentFeatured.song.title} — {currentFeatured.song.artist}
                 </Badge>
               )}
@@ -617,7 +617,7 @@ export default function AdminStudio() {
 
               <div className="flex items-end">
                 <Button
-                  className="bg-[#F4BE44] text-black hover:bg-[#F4BE44]/90 font-black uppercase text-xs tracking-widest px-6 h-10"
+                  className="bg-accent text-black hover:bg-accent/90 font-black uppercase text-xs tracking-widest px-6 h-10"
                   disabled={!featTitle || !featArtist || !featAudioPath || publishFeaturedMutation.isPending}
                   onClick={() => publishFeaturedMutation.mutate()}
                   data-testid="button-publish-featured"
@@ -639,7 +639,7 @@ export default function AdminStudio() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-white/60">
-              This track will be added to the Music catalogue and priced at <span className="text-[#22D3EE] font-semibold">$1</span> automatically.
+              This track will be added to the Music catalogue and priced at <span className="text-primary font-semibold">$1</span> automatically.
             </p>
             <div className="space-y-2">
               <Label htmlFor="promote-title">Song Title</Label>
@@ -697,7 +697,7 @@ export default function AdminStudio() {
             <Button
               onClick={handlePromote}
               disabled={!promoteArtist || promoteMutation.isPending}
-              className="bg-[#22D3EE] text-black hover:bg-[#22D3EE]/90"
+              className="bg-primary text-black hover:bg-primary/90"
               data-testid="button-promote-confirm"
             >
               {promoteMutation.isPending ? "Promoting..." : "Promote for $1"}

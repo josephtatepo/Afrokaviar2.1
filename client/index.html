@@ -26,6 +26,15 @@
     ></script>
   </head>
   <body>
+    <script>
+      (function(){
+        var m=localStorage.getItem('afrokaviar-mode');
+        var t=localStorage.getItem('afrokaviar-color-theme');
+        if(!m||m==='dark')document.documentElement.classList.add('dark');
+        if(t)document.documentElement.setAttribute('data-theme',t);
+        else document.documentElement.setAttribute('data-theme','cyan-gold');
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

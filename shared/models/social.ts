@@ -112,6 +112,60 @@ export const insertSocialPostLikeSchema = createInsertSchema(socialPostLikes).om
   createdAt: true,
 });
 
+export const socialPostComments = pgTable("social_post_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  postId: varchar("post_id").notNull().references(() => socialPosts.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  textContent: text("text_content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("social_post_comments_post_idx").on(table.postId),
+  index("social_post_comments_author_idx").on(table.authorId),
+  index("social_post_comments_created_at_idx").on(table.createdAt),
+]);
+
+export const insertSocialPostCommentSchema = createInsertSchema(socialPostComments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const clips = pgTable("clips", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  description: text("description"),
+  videoUrl: text("video_url").notNull(),
+  thumbnailUrl: text("thumbnail_url"),
+  duration: integer("duration"),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  likesCount: integer("likes_count").default(0).notNull(),
+  commentsCount: integer("comments_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("clips_author_idx").on(table.authorId),
+  index("clips_created_at_idx").on(table.createdAt),
+]);
+
+export const insertClipSchema = createInsertSchema(clips).omit({
+  id: true,
+  likesCount: true,
+  commentsCount: true,
+  createdAt: true,
+});
+
+export const clipLikes = pgTable("clip_likes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  clipId: varchar("clip_id").notNull().references(() => clips.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("clip_likes_user_clip_idx").on(table.userId, table.clipId),
+]);
+
+export const insertClipLikeSchema = createInsertSchema(clipLikes).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type SocialTrack = typeof socialTracks.$inferSelect;
 export type InsertSocialTrack = z.infer<typeof insertSocialTrackSchema>;
 export type SocialTrackSave = typeof socialTrackSaves.$inferSelect;
@@ -122,3 +176,9 @@ export type SocialPost = typeof socialPosts.$inferSelect;
 export type InsertSocialPost = z.infer<typeof insertSocialPostSchema>;
 export type SocialPostLike = typeof socialPostLikes.$inferSelect;
 export type InsertSocialPostLike = z.infer<typeof insertSocialPostLikeSchema>;
+export type SocialPostComment = typeof socialPostComments.$inferSelect;
+export type InsertSocialPostComment = z.infer<typeof insertSocialPostCommentSchema>;
+export type Clip = typeof clips.$inferSelect;
+export type InsertClip = z.infer<typeof insertClipSchema>;
+export type ClipLike = typeof clipLikes.$inferSelect;
+export type InsertClipLike = z.infer<typeof insertClipLikeSchema>;

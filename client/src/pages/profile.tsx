@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Camera, Check, Clock, Copy, LogOut, Mail, Save, User, UserPlus, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Camera, Check, Clock, Copy, LogOut, Mail, Moon, Palette, Save, Sun, User, UserPlus, X } from "lucide-react";
+import { useTheme, THEME_LABELS, THEME_PREVIEW, type ColorTheme } from "@/lib/theme";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ export default function Profile() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = !!user?.adminRole;
+  const { colorTheme, mode, setColorTheme, setMode } = useTheme();
 
   const { data: profileData } = useQuery({
     queryKey: ["/api/user/profile"],
@@ -246,7 +248,7 @@ export default function Profile() {
                 {user.email}
               </div>
               {currentHandle && (
-                <div className="text-sm text-[#22D3EE]" data-testid="text-profile-handle">
+                <div className="text-sm text-primary" data-testid="text-profile-handle">
                   @{currentHandle}
                 </div>
               )}
@@ -276,7 +278,7 @@ export default function Profile() {
                 <Button
                   onClick={handleSaveHandle}
                   disabled={!handle || !canChangeHandle || updateHandleMutation.isPending}
-                  className="bg-[#22D3EE] text-black hover:bg-[#06B6D4]"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
                   data-testid="button-save-handle"
                 >
                   <Save className="h-4 w-4 mr-2" />
@@ -303,6 +305,89 @@ export default function Profile() {
                 <div className="mt-1 text-white font-medium capitalize">
                   {user.authProvider || "N/A"}
                 </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Appearance Settings */}
+        <Card className="rounded-2xl border border-border bg-card/50 p-6 text-card-foreground backdrop-blur-md mb-6" data-testid="panel-appearance">
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2">
+              <Palette className="h-5 w-5 text-muted-foreground" />
+              <div className="font-display text-xl">Appearance</div>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div>
+              <Label className="text-sm text-muted-foreground mb-3 block">Color Theme</Label>
+              <div className="grid grid-cols-3 gap-3">
+                {(["cyan-gold", "ember-warm", "sage-earth"] as ColorTheme[]).map((theme) => (
+                  <button
+                    key={theme}
+                    onClick={() => setColorTheme(theme)}
+                    className={`relative rounded-xl border-2 p-3 transition-all ${
+                      colorTheme === theme
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:border-muted-foreground/30 bg-card"
+                    }`}
+                    data-testid={`button-theme-${theme}`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <div
+                        className="w-4 h-4 rounded-full"
+                        style={{ backgroundColor: THEME_PREVIEW[theme].primary }}
+                      />
+                      <div
+                        className="w-4 h-4 rounded-full"
+                        style={{ backgroundColor: THEME_PREVIEW[theme].accent }}
+                      />
+                    </div>
+                    <div className="text-xs font-bold truncate">
+                      {THEME_LABELS[theme]}
+                    </div>
+                    {colorTheme === theme && (
+                      <div className="absolute top-2 right-2">
+                        <Check className="w-3.5 h-3.5 text-primary" />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Separator className="bg-border" />
+
+            <div>
+              <Label className="text-sm text-muted-foreground mb-3 block">Mode</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setMode("light")}
+                  className={`flex items-center gap-3 rounded-xl border-2 p-3 transition-all ${
+                    mode === "light"
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-muted-foreground/30 bg-card"
+                  }`}
+                  data-testid="button-mode-light"
+                >
+                  <Sun className="w-5 h-5" />
+                  <span className="text-sm font-bold">Light</span>
+                  {mode === "light" && <Check className="w-3.5 h-3.5 text-primary ml-auto" />}
+                </button>
+                <button
+                  onClick={() => setMode("dark")}
+                  className={`flex items-center gap-3 rounded-xl border-2 p-3 transition-all ${
+                    mode === "dark"
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-muted-foreground/30 bg-card"
+                  }`}
+                  data-testid="button-mode-dark"
+                >
+                  <Moon className="w-5 h-5" />
+                  <span className="text-sm font-bold">Dark</span>
+                  {mode === "dark" && <Check className="w-3.5 h-3.5 text-primary ml-auto" />}
+                </button>
               </div>
             </div>
           </div>
@@ -416,9 +501,9 @@ export default function Profile() {
 
         {/* Admin Controls - Only visible to admins */}
         {isAdmin && (
-          <Card className="rounded-2xl border border-[#22D3EE]/30 bg-[#22D3EE]/5 p-6 text-white/80 backdrop-blur-md" data-testid="panel-admin-controls">
+          <Card className="rounded-2xl border border-primary/30 bg-primary/5 p-6 text-white/80 backdrop-blur-md" data-testid="panel-admin-controls">
             <div className="flex items-center gap-3 mb-4">
-              <Badge className="bg-[#22D3EE]/20 text-[#22D3EE] border border-[#22D3EE]/30">
+              <Badge className="bg-primary/20 text-primary border border-primary/30">
                 Admin Only
               </Badge>
               <div className="font-display text-xl text-white">Admin Controls</div>
@@ -427,7 +512,7 @@ export default function Profile() {
               Access the full Admin Studio for content management, review queues, and platform controls.
             </p>
             <Link href="/admin" data-testid="link-admin-studio">
-              <Button className="bg-[#22D3EE] text-black hover:bg-[#06B6D4]">
+              <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
                 Open Admin Studio
               </Button>
             </Link>

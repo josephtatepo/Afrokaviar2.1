@@ -8,7 +8,7 @@ export default function Blueprint() {
       <div className="mx-auto w-full max-w-4xl px-6 py-12">
         <Link href="/" data-testid="link-blueprint-back">
           <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }}>
-            AFRO<span className="text-[#22D3EE] mx-[7px]">•</span>KAVIAR
+            AFRO<span className="text-[#22D3EE] mx-[4px]">•</span>KAVIAR
           </span>
         </Link>
         
