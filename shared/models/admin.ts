@@ -67,9 +67,27 @@ export const insertFeaturedContentSchema = createInsertSchema(featuredContent).o
   updatedAt: true,
 });
 
+export const pwaInstallations = pgTable("pwa_installations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  platform: text("platform").notNull(),
+  userAgent: text("user_agent"),
+  installedAt: timestamp("installed_at").defaultNow().notNull(),
+}, (table) => [
+  index("pwa_installations_user_idx").on(table.userId),
+  index("pwa_installations_date_idx").on(table.installedAt),
+]);
+
+export const insertPwaInstallationSchema = createInsertSchema(pwaInstallations).omit({
+  id: true,
+  installedAt: true,
+});
+
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
 export type Invite = typeof invites.$inferSelect;
 export type InsertInvite = z.infer<typeof insertInviteSchema>;
 export type FeaturedContent = typeof featuredContent.$inferSelect;
 export type InsertFeaturedContent = z.infer<typeof insertFeaturedContentSchema>;
+export type PwaInstallation = typeof pwaInstallations.$inferSelect;
+export type InsertPwaInstallation = z.infer<typeof insertPwaInstallationSchema>;

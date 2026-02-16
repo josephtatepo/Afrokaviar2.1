@@ -80,6 +80,7 @@ export const socialPosts = pgTable("social_posts", {
   audioTitle: text("audio_title"),
   audioDuration: integer("audio_duration"),
   videoUrl: text("video_url"),
+  linkUrl: text("link_url"),
   authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   likesCount: integer("likes_count").default(0).notNull(),
   commentsCount: integer("comments_count").default(0).notNull(),

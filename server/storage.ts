@@ -44,8 +44,17 @@ import {
   clips,
   clipLikes,
   libraryItems,
+  playbackProgress,
+  userStorage,
+  socialTrackSaves,
   type AdminUser,
   type InsertAdminUser,
+  type PwaInstallation,
+  type InsertPwaInstallation,
+  pwaInstallations,
+  type SavedItem,
+  type InsertSavedItem,
+  savedItems,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, lt, count } from "drizzle-orm";
@@ -148,6 +157,21 @@ export interface IStorage {
   createLibraryItem(item: InsertLibraryItem): Promise<LibraryItem>;
   getUserLibraryItems(userId: string, type?: string): Promise<LibraryItem[]>;
   getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number; isAdmin: boolean }>;
+
+  // PWA installations
+  createPwaInstallation(install: InsertPwaInstallation): Promise<PwaInstallation>;
+  getPwaInstallations(limit?: number, offset?: number): Promise<PwaInstallation[]>;
+  getPwaInstallationCount(): Promise<number>;
+  getUserPwaInstallation(userId: string): Promise<PwaInstallation | undefined>;
+
+  // Saved items
+  getSavedItems(userId: string): Promise<SavedItem[]>;
+  saveItem(item: InsertSavedItem): Promise<SavedItem>;
+  unsaveItem(userId: string, contentType: string, contentId: string): Promise<boolean>;
+  isSaved(userId: string, contentType: string, contentId: string): Promise<boolean>;
+
+  // Account deletion
+  deleteUserAccount(userId: string): Promise<{ deletedFiles: string[] }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -717,6 +741,107 @@ export class DatabaseStorage implements IStorage {
     const likes = await db.select({ clipId: clipLikes.clipId }).from(clipLikes)
       .where(and(eq(clipLikes.userId, userId), sql`${clipLikes.clipId} = ANY(${clipIds})`));
     return likes.map(l => l.clipId);
+  }
+  async createPwaInstallation(install: InsertPwaInstallation): Promise<PwaInstallation> {
+    const [result] = await db.insert(pwaInstallations).values(install).returning();
+    return result;
+  }
+
+  async getPwaInstallations(limit: number = 50, offset: number = 0): Promise<PwaInstallation[]> {
+    return db.select().from(pwaInstallations).orderBy(desc(pwaInstallations.installedAt)).limit(limit).offset(offset);
+  }
+
+  async getPwaInstallationCount(): Promise<number> {
+    const [result] = await db.select({ count: count() }).from(pwaInstallations);
+    return result?.count ?? 0;
+  }
+
+  async getUserPwaInstallation(userId: string): Promise<PwaInstallation | undefined> {
+    const [result] = await db.select().from(pwaInstallations).where(eq(pwaInstallations.userId, userId));
+    return result;
+  }
+
+  async getSavedItems(userId: string): Promise<SavedItem[]> {
+    return db.select().from(savedItems).where(eq(savedItems.userId, userId)).orderBy(desc(savedItems.savedAt));
+  }
+
+  async saveItem(item: InsertSavedItem): Promise<SavedItem> {
+    const existing = await db.select().from(savedItems)
+      .where(and(eq(savedItems.userId, item.userId), eq(savedItems.contentType, item.contentType), eq(savedItems.contentId, item.contentId)));
+    if (existing.length > 0) return existing[0];
+
+    const userSaved = await db.select({ cnt: count() }).from(savedItems).where(eq(savedItems.userId, item.userId));
+    if (userSaved[0]?.cnt >= 100) {
+      const oldest = await db.select().from(savedItems).where(eq(savedItems.userId, item.userId)).orderBy(savedItems.savedAt).limit(1);
+      if (oldest.length > 0) {
+        await db.delete(savedItems).where(eq(savedItems.id, oldest[0].id));
+      }
+    }
+
+    const [result] = await db.insert(savedItems).values(item).returning();
+    return result;
+  }
+
+  async unsaveItem(userId: string, contentType: string, contentId: string): Promise<boolean> {
+    const result = await db.delete(savedItems)
+      .where(and(eq(savedItems.userId, userId), eq(savedItems.contentType, contentType), eq(savedItems.contentId, contentId)));
+    return (result?.rowCount ?? 0) > 0;
+  }
+
+  async isSaved(userId: string, contentType: string, contentId: string): Promise<boolean> {
+    const result = await db.select().from(savedItems)
+      .where(and(eq(savedItems.userId, userId), eq(savedItems.contentType, contentType), eq(savedItems.contentId, contentId)));
+    return result.length > 0;
+  }
+
+  async deleteUserAccount(userId: string): Promise<{ deletedFiles: string[] }> {
+    const filePaths: string[] = [];
+
+    const userLibItems = await db.select().from(libraryItems).where(eq(libraryItems.userId, userId));
+    for (const item of userLibItems) {
+      if (item.objectPath) filePaths.push(item.objectPath);
+    }
+
+    const userTracks = await db.select().from(socialTracks).where(eq(socialTracks.uploadedBy, userId));
+    for (const track of userTracks) {
+      if (track.audioUrl) filePaths.push(track.audioUrl);
+      if (track.artworkUrl) filePaths.push(track.artworkUrl);
+    }
+
+    const userPosts = await db.select().from(socialPosts).where(eq(socialPosts.authorId, userId));
+    for (const post of userPosts) {
+      if (post.imageUrl) filePaths.push(post.imageUrl);
+      if (post.audioUrl) filePaths.push(post.audioUrl);
+      if (post.videoUrl) filePaths.push(post.videoUrl);
+    }
+
+    const userClips = await db.select().from(clips).where(eq(clips.authorId, userId));
+    for (const clip of userClips) {
+      if (clip.videoUrl) filePaths.push(clip.videoUrl);
+      if (clip.thumbnailUrl) filePaths.push(clip.thumbnailUrl);
+    }
+
+    await db.delete(playbackProgress).where(eq(playbackProgress.userId, userId));
+    await db.delete(libraryItems).where(eq(libraryItems.userId, userId));
+    await db.delete(userStorage).where(eq(userStorage.userId, userId));
+    await db.delete(songReactions).where(eq(songReactions.userId, userId));
+    await db.delete(songFavorites).where(eq(songFavorites.userId, userId));
+    await db.delete(socialTrackSaves).where(eq(socialTrackSaves.userId, userId));
+    await db.delete(socialPostLikes).where(eq(socialPostLikes.userId, userId));
+    await db.delete(socialPostComments).where(eq(socialPostComments.authorId, userId));
+    await db.delete(clipLikes).where(eq(clipLikes.userId, userId));
+    await db.delete(clips).where(eq(clips.authorId, userId));
+    await db.delete(socialPosts).where(eq(socialPosts.authorId, userId));
+    await db.delete(socialTracks).where(eq(socialTracks.uploadedBy, userId));
+    await db.delete(entitlements).where(eq(entitlements.userId, userId));
+    await db.delete(orders).where(eq(orders.userId, userId));
+    await db.delete(invites).where(eq(invites.invitedBy, userId));
+    await db.delete(savedItems).where(eq(savedItems.userId, userId));
+    await db.delete(pwaInstallations).where(eq(pwaInstallations.userId, userId));
+    await db.delete(adminUsers).where(eq(adminUsers.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+
+    return { deletedFiles: filePaths };
   }
 }
 

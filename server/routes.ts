@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupSocialAuth, registerSocialAuthRoutes, isAuthenticated } from "./auth/socialAuth";
-import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
+import { registerObjectStorageRoutes, objectStorageClient } from "./replit_integrations/object_storage";
 import { stripeService } from "./stripeService";
 import { getStripePublishableKey, getUncachableStripeClient } from "./stripeClient";
 import { db } from "./db";
@@ -858,10 +858,14 @@ export async function registerRoutes(
 
   app.post("/api/social-posts", isAuthenticated, async (req: any, res) => {
     try {
-      const { textContent, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl } = req.body;
+      const { textContent, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl, linkUrl } = req.body;
 
-      if (!textContent && !imageUrl && !audioUrl && !videoUrl) {
-        return res.status(400).json({ message: "Post must have text, image, audio, or video content" });
+      if (!textContent && !imageUrl && !audioUrl && !videoUrl && !linkUrl) {
+        return res.status(400).json({ message: "Post must have text, image, audio, video, or link content" });
+      }
+
+      if (textContent && textContent.length > 3600) {
+        return res.status(400).json({ message: "Post text cannot exceed 3600 characters (~600 words)" });
       }
 
       const post = await storage.createSocialPost({
@@ -871,6 +875,7 @@ export async function registerRoutes(
         audioTitle: audioTitle || null,
         audioDuration: audioDuration || null,
         videoUrl: videoUrl || null,
+        linkUrl: linkUrl || null,
         authorId: req.user.id,
       });
 
@@ -1033,8 +1038,8 @@ export async function registerRoutes(
       if (!videoUrl || typeof videoUrl !== "string") {
         return res.status(400).json({ error: "Video URL is required" });
       }
-      if (duration !== undefined && duration !== null && (typeof duration !== "number" || duration > 60)) {
-        return res.status(400).json({ error: "Clip duration must be 60 seconds or less" });
+      if (duration !== undefined && duration !== null && (typeof duration !== "number" || duration > 600)) {
+        return res.status(400).json({ error: "Clip duration must be 10 minutes or less" });
       }
       const clip = await storage.createClip({
         title: title.trim(),
@@ -1223,6 +1228,135 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error setting featured content:", error);
       res.status(500).json({ message: "Failed to set featured content" });
+    }
+  });
+
+  // PWA installation tracking
+  app.post("/api/pwa-install", isAuthenticated, async (req: any, res) => {
+    try {
+      const validPlatforms = ["ios", "android", "windows", "macos", "linux", "unknown"];
+      const platform = typeof req.body.platform === "string" && validPlatforms.includes(req.body.platform) ? req.body.platform : "unknown";
+      const userAgent = typeof req.body.userAgent === "string" ? req.body.userAgent.slice(0, 500) : null;
+      const existing = await storage.getUserPwaInstallation(req.user.id);
+      if (existing) {
+        return res.json({ message: "Already recorded", installation: existing });
+      }
+      const installation = await storage.createPwaInstallation({
+        userId: req.user.id,
+        platform,
+        userAgent,
+      });
+      res.status(201).json(installation);
+    } catch (error) {
+      console.error("Error recording PWA install:", error);
+      res.status(500).json({ message: "Failed to record installation" });
+    }
+  });
+
+  app.get("/api/admin/pwa-installs", isAuthenticated, isAdmin, async (req: any, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const [installations, totalCount] = await Promise.all([
+        storage.getPwaInstallations(limit, offset),
+        storage.getPwaInstallationCount(),
+      ]);
+      const installsWithUsers = await Promise.all(
+        installations.map(async (install) => {
+          const user = await storage.getUser(install.userId);
+          return {
+            ...install,
+            userName: user?.firstName || user?.handle || "Unknown",
+            userEmail: user?.email || null,
+          };
+        })
+      );
+      res.json({ installations: installsWithUsers, total: totalCount });
+    } catch (error) {
+      console.error("Error fetching PWA installs:", error);
+      res.status(500).json({ message: "Failed to fetch installations" });
+    }
+  });
+
+  app.delete("/api/account", isAuthenticated, async (req: any, res) => {
+    try {
+      const { confirmation } = req.body;
+      if (confirmation !== "Delete") {
+        return res.status(400).json({ message: "Please type 'Delete' to confirm account deletion." });
+      }
+
+      const userId = req.user.id;
+      const { deletedFiles } = await storage.deleteUserAccount(userId);
+
+      for (const filePath of deletedFiles) {
+        try {
+          const normalized = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+          const parts = normalized.split("/");
+          if (parts.length >= 2) {
+            const bucketName = parts[0];
+            const objectName = parts.slice(1).join("/");
+            const bucket = objectStorageClient.bucket(bucketName);
+            const file = bucket.file(objectName);
+            const [exists] = await file.exists();
+            if (exists) await file.delete();
+          }
+        } catch (fileErr) {
+          console.error(`Failed to delete file ${filePath}:`, fileErr);
+        }
+      }
+
+      req.logout((err: any) => {
+        if (err) console.error("Logout error during account deletion:", err);
+        req.session.destroy((sessErr: any) => {
+          if (sessErr) console.error("Session destroy error:", sessErr);
+          res.json({ message: "Account deleted successfully" });
+        });
+      });
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      res.status(500).json({ message: "Failed to delete account. Please try again." });
+    }
+  });
+
+  // Saved items
+  app.get("/api/me/saved", isAuthenticated, async (req: any, res) => {
+    try {
+      const items = await storage.getSavedItems(req.user.id);
+      res.json(items);
+    } catch (error) {
+      console.error("Error fetching saved items:", error);
+      res.status(500).json({ message: "Failed to fetch saved items" });
+    }
+  });
+
+  app.post("/api/me/saved", isAuthenticated, async (req: any, res) => {
+    try {
+      const { contentType, contentId, title, metadata } = req.body;
+      if (!contentType || !contentId || !title) {
+        return res.status(400).json({ message: "contentType, contentId, and title are required" });
+      }
+      const item = await storage.saveItem({
+        userId: req.user.id,
+        contentType,
+        contentId,
+        title,
+        metadata: metadata || null,
+      });
+      res.json(item);
+    } catch (error) {
+      console.error("Error saving item:", error);
+      res.status(500).json({ message: "Failed to save item" });
+    }
+  });
+
+  app.delete("/api/me/saved/:contentType/:contentId", isAuthenticated, async (req: any, res) => {
+    try {
+      const { contentType, contentId } = req.params;
+      await storage.unsaveItem(req.user.id, contentType, contentId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error unsaving item:", error);
+      res.status(500).json({ message: "Failed to unsave item" });
     }
   });
 

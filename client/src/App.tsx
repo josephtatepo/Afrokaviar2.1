@@ -15,6 +15,7 @@ import Profile from "@/pages/profile";
 import PrivacyPolicy from "@/pages/privacy-policy";
 import Terms from "@/pages/terms";
 import Blueprint from "@/pages/blueprint";
+import { PwaInstallPrompt } from "@/components/pwa-install-prompt";
 
 function Router() {
   return (
@@ -41,6 +42,7 @@ function App() {
           <TooltipProvider>
             <Toaster />
             <Router />
+            <PwaInstallPrompt />
           </TooltipProvider>
         </I18nProvider>
       </ThemeProvider>

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Camera, Check, Clock, Copy, LogOut, Mail, Moon, Palette, Save, Sun, User, UserPlus, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BarChart3, Camera, Check, Clock, Copy, LogOut, Mail, Moon, Palette, Save, Sun, Trash2, User, UserPlus, X } from "lucide-react";
 import { useTheme, THEME_LABELS, THEME_PREVIEW, type ColorTheme } from "@/lib/theme";
 
 import { Badge } from "@/components/ui/badge";
@@ -84,6 +84,8 @@ export default function Profile() {
   });
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
   const inviteMutation = useMutation({
     mutationFn: async (email: string) => {
@@ -107,6 +109,28 @@ export default function Profile() {
       });
       setInviteEmail("");
       queryClient.invalidateQueries({ queryKey: ["/api/me/invites"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/account", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: "Delete" }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to delete account");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.clear();
+      setLocation("/");
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -501,7 +525,7 @@ export default function Profile() {
 
         {/* Admin Controls - Only visible to admins */}
         {isAdmin && (
-          <Card className="rounded-2xl border border-primary/30 bg-primary/5 p-6 text-white/80 backdrop-blur-md" data-testid="panel-admin-controls">
+          <Card className="rounded-2xl border border-primary/30 bg-primary/5 p-6 text-white/80 backdrop-blur-md mb-6" data-testid="panel-admin-controls">
             <div className="flex items-center gap-3 mb-4">
               <Badge className="bg-primary/20 text-primary border border-primary/30">
                 Admin Only
@@ -517,6 +541,89 @@ export default function Profile() {
               </Button>
             </Link>
           </Card>
+        )}
+
+        {/* Delete Account Section */}
+        <Card className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6 text-white/80 backdrop-blur-md" data-testid="panel-delete-account">
+          <div className="flex items-center gap-3 mb-3">
+            <Trash2 className="h-5 w-5 text-red-400" />
+            <div className="font-display text-xl text-white">Delete Account</div>
+          </div>
+          <p className="text-sm text-white/60 mb-4">
+            Permanently delete your account and all associated data including uploads, posts, library items, and purchase history. This action cannot be undone.
+          </p>
+          <Button
+            variant="destructive"
+            onClick={() => setShowDeleteDialog(true)}
+            className="bg-red-600 hover:bg-red-700 text-white"
+            data-testid="button-delete-account"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete My Account
+          </Button>
+        </Card>
+
+        {/* Delete Account Confirmation Dialog */}
+        {showDeleteDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <Card className="w-full max-w-md rounded-2xl border border-red-500/30 bg-zinc-900 p-6 text-white shadow-2xl" data-testid="dialog-delete-account">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/20">
+                  <AlertTriangle className="h-5 w-5 text-red-400" />
+                </div>
+                <div>
+                  <div className="font-display text-lg text-white">Are you sure?</div>
+                  <div className="text-xs text-white/50">This action is permanent and irreversible</div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 mb-4">
+                <p className="text-sm text-red-300">
+                  This will permanently delete your account, all uploaded files, posts, tracks, clips, library items, favorites, and purchase history. You will be logged out immediately.
+                </p>
+              </div>
+
+              <div className="mb-4">
+                <Label className="text-sm text-white/70 mb-2 block">
+                  Type <span className="font-bold text-white">Delete</span> to confirm
+                </Label>
+                <Input
+                  value={deleteConfirmation}
+                  onChange={(e) => setDeleteConfirmation(e.target.value)}
+                  placeholder='Type "Delete" here'
+                  className="h-11 bg-black/30 border-white/10 text-white placeholder:text-white/35"
+                  data-testid="input-delete-confirmation"
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <Button
+                  variant="ghost"
+                  className="flex-1 text-white/70 hover:text-white hover:bg-white/10"
+                  onClick={() => { setShowDeleteDialog(false); setDeleteConfirmation(""); }}
+                  data-testid="button-cancel-delete"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  disabled={deleteConfirmation !== "Delete" || deleteAccountMutation.isPending}
+                  onClick={() => deleteAccountMutation.mutate()}
+                  data-testid="button-confirm-delete"
+                >
+                  {deleteAccountMutation.isPending ? (
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+                      Deleting...
+                    </div>
+                  ) : (
+                    "Delete My Account"
+                  )}
+                </Button>
+              </div>
+            </Card>
+          </div>
         )}
       </div>
     </div>

@@ -66,6 +66,15 @@ Preferred communication style: Simple, everyday language.
 - **Content Viewers**: Inline image viewer, video player, PDF reader, audio player in library
 - **File Category Tracking**: contentType stored in library item metadata for proper icon/viewer selection
 
+### PWA / App Install System
+- **Manifest**: `client/public/manifest.json` with app icons and standalone display mode
+- **Service Worker**: `client/public/sw.js` minimal passthrough for PWA eligibility
+- **Install Prompt**: `client/src/components/pwa-install-prompt.tsx` shows 1 minute after login
+- **Browser Support**: On Android/Chrome/Edge uses native `beforeinstallprompt` for one-tap install; on iOS shows Share → Add to Home Screen instructions
+- **Install Tracking**: `pwa_installations` table records userId, platform, userAgent, installedAt
+- **Admin Panel**: PWA installation stats visible in Admin Studio with user/platform/date breakdown
+- **Dismissal**: Prompt dismissed state saved in localStorage (`pwa-prompt-dismissed`)
+
 ### Key Design Patterns
 - **Shared Types**: Schema definitions in `shared/` are used by both client and server
 - **Path Aliases**: `@/` for client source, `@shared/` for shared code

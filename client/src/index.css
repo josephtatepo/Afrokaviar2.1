@@ -584,3 +584,16 @@
     color: hsl(var(--muted-foreground)) !important;
   }
 }
+
+@keyframes comment-wiggle {
+  0%, 70%, 100% { transform: rotate(0deg); }
+  75% { transform: rotate(-12deg); }
+  80% { transform: rotate(10deg); }
+  85% { transform: rotate(-8deg); }
+  90% { transform: rotate(6deg); }
+  95% { transform: rotate(-3deg); }
+}
+
+.comment-wiggle-active {
+  animation: comment-wiggle 3s ease-in-out 1;
+}

@@ -41,11 +41,17 @@ import {
   Maximize2,
   Minimize2,
   Pause,
+  Link2,
   Moon,
   Palette,
   Send,
   Sun,
   X,
+  ChevronDown,
+  ChevronUp,
+  ArrowUp,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
@@ -78,6 +84,19 @@ function extractYouTubeId(text: string): string | null {
     if (match) return match[1];
   }
   return null;
+}
+
+function extractInstagramId(url: string): string | null {
+  const match = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
+function isYouTubeUrl(url: string): boolean {
+  return !!extractYouTubeId(url);
+}
+
+function isInstagramUrl(url: string): boolean {
+  return !!extractInstagramId(url);
 }
 
 type TvChannel = {
@@ -129,6 +148,7 @@ type SocialPost = {
   audioTitle: string | null;
   audioDuration: number | null;
   videoUrl: string | null;
+  linkUrl: string | null;
   authorId: string;
   likesCount: number;
   commentsCount: number;
@@ -412,9 +432,24 @@ const NAV_ITEMS = [
 export default function ExplorePage() {
   const [tab, setTab] = useState("radio-tv");
   const [query, setQuery] = useState("");
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const queryClient = useQueryClient();
   const [socialView, setSocialView] = useState<"posts" | "tracks" | "clips">("posts");
   const [socialPlayingId, setSocialPlayingId] = useState<string | null>(null);
+
+  const [fabPosition, setFabPosition] = useState({ x: -1, y: -1 });
+  const fabRef = useRef<HTMLButtonElement>(null);
+  const fabDragRef = useRef({ isDragging: false, startX: 0, startY: 0, startPosX: 0, startPosY: 0 });
+
+  type LastTappedContent = { tab: string; contentId: string; contentType: string; title: string; timestamp: number } | null;
+  const [lastTappedContent, setLastTappedContent] = useState<LastTappedContent>(null);
+  const FAB_EXPIRY_MS = 15 * 60 * 1000;
+
+  const recordTap = (tapTab: string, contentId: string, contentType: string, title: string) => {
+    setLastTappedContent({ tab: tapTab, contentId, contentType, title, timestamp: Date.now() });
+  };
+
+  const isFabValid = lastTappedContent && (Date.now() - lastTappedContent.timestamp < FAB_EXPIRY_MS);
 
   // Auth
   const { user, isAuthenticated } = useAuth();
@@ -456,7 +491,6 @@ export default function ExplorePage() {
   // Music - Real API data
   const { data: songs = [], isLoading: songsLoading, refetch: refetchSongs } = useQuery<Song[]>({
     queryKey: ["/api/songs"],
-    enabled: tab === "music",
   });
 
   const { data: favoritesData = [] } = useQuery<{ songId: string }[]>({
@@ -591,11 +625,9 @@ export default function ExplorePage() {
   // Fetch social tracks from API
   const { data: socialTracksData = [], refetch: refetchSocialTracks } = useQuery<SocialTrack[]>({
     queryKey: ["/api/social-tracks"],
-    enabled: tab === "social",
   });
   const { data: socialPostsData = [], refetch: refetchSocialPosts } = useQuery<SocialPost[]>({
     queryKey: ["/api/social-posts"],
-    enabled: tab === "social",
   });
   type ClipWithAuthor = {
     id: string;
@@ -615,6 +647,45 @@ export default function ExplorePage() {
     enabled: tab === "social",
   });
   const [socialSaved, setSocialSaved] = useState<Record<string, boolean>>({});
+
+  type SavedItem = { id: string; contentType: string; contentId: string; title: string; metadata: any; savedAt: string };
+  const { data: savedItemsData = [], refetch: refetchSavedItems } = useQuery<SavedItem[]>({
+    queryKey: ["/api/me/saved"],
+    enabled: isAuthenticated,
+  });
+  const savedItemsSet = useMemo(() => {
+    const s = new Set<string>();
+    savedItemsData.forEach((item) => s.add(`${item.contentType}:${item.contentId}`));
+    return s;
+  }, [savedItemsData]);
+  const [showBookmarks, setShowBookmarks] = useState(false);
+  const [bookmarkSearch, setBookmarkSearch] = useState("");
+  const [bookmarkSort, setBookmarkSort] = useState<"newest" | "oldest" | "type">("newest");
+
+  const filteredSavedItems = useMemo(() => {
+    let items = [...savedItemsData];
+    if (bookmarkSearch.trim()) {
+      const q = bookmarkSearch.toLowerCase();
+      items = items.filter((i) => i.title.toLowerCase().includes(q) || i.contentType.toLowerCase().includes(q));
+    }
+    if (bookmarkSort === "oldest") items.reverse();
+    if (bookmarkSort === "type") items.sort((a, b) => a.contentType.localeCompare(b.contentType));
+    return items;
+  }, [savedItemsData, bookmarkSearch, bookmarkSort]);
+
+  const toggleSaveItem = async (contentType: string, contentId: string, title: string) => {
+    if (!isAuthenticated) {
+      toast({ title: t("common.sign_in_required") || "Sign in required", variant: "destructive" });
+      return;
+    }
+    const key = `${contentType}:${contentId}`;
+    if (savedItemsSet.has(key)) {
+      await fetch(`/api/me/saved/${contentType}/${contentId}`, { method: "DELETE", credentials: "include" });
+    } else {
+      await fetch("/api/me/saved", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ contentType, contentId, title }) });
+    }
+    refetchSavedItems();
+  };
 
   // Fetch library uploads from API
   type ApiLibraryItem = {
@@ -748,9 +819,12 @@ export default function ExplorePage() {
   const [postImagePreview, setPostImagePreview] = useState<string | null>(null);
   const [postAudioFile, setPostAudioFile] = useState<File | null>(null);
   const [postVideoFile, setPostVideoFile] = useState<File | null>(null);
+  const [postLinkUrl, setPostLinkUrl] = useState("");
   const [isPostSubmitting, setIsPostSubmitting] = useState(false);
   const [postLikes, setPostLikes] = useState<Record<string, boolean>>({});
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
+  const [expandedPosts, setExpandedPosts] = useState<Record<string, boolean>>({});
   const [commentTexts, setCommentTexts] = useState<Record<string, string>>({});
   const [postComments, setPostComments] = useState<Record<string, SocialPostComment[]>>({});
   const [loadingComments, setLoadingComments] = useState<Record<string, boolean>>({});
@@ -808,7 +882,6 @@ export default function ExplorePage() {
   };
 
   useEffect(() => {
-    if (tab !== "radio-tv") return;
     setTvLoading(true);
     setTvError(null);
 
@@ -821,7 +894,7 @@ export default function ExplorePage() {
         setTvLoading(false);
         setTvError(e instanceof Error ? e.message : "Failed to load channels");
       });
-  }, [tab]);
+  }, []);
 
   const tvCountries = useMemo(() => {
     const set = new Set(tvChannels.map((c) => c.country).filter(Boolean));
@@ -976,11 +1049,11 @@ export default function ExplorePage() {
       setRecordingTime(0);
       recordingTimerRef.current = setInterval(() => {
         setRecordingTime(prev => {
-          if (prev >= 59) {
+          if (prev >= 599) {
             mediaRecorderRef.current?.stop();
             setIsRecording(false);
             if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-            return 60;
+            return 600;
           }
           return prev + 1;
         });
@@ -1092,9 +1165,19 @@ export default function ExplorePage() {
       .filter((i) => (q ? `${i.title} ${i.artist ?? ""}`.toLowerCase().includes(q) : true));
   }, [allLibraryItems, libraryFilter, query]);
 
-  function togglePlayMock(title: string) {
-    setNowPlaying(title);
-    setIsPlaying((p) => !p);
+  function togglePlaySong(songId: string, title: string, audioUrl: string) {
+    if (nowPlayingId === songId && isPlaying) {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    } else {
+      setNowPlaying(title);
+      setNowPlayingId(songId);
+      setIsPlaying(true);
+      if (audioRef.current) {
+        audioRef.current.src = audioUrl;
+        audioRef.current.play().catch(() => {});
+      }
+    }
   }
 
   return (
@@ -1168,12 +1251,77 @@ export default function ExplorePage() {
               )}
               <div className="flex flex-col min-w-0">
                 <span className="text-xs font-bold text-white truncate">{user.firstName || user.handle || 'User'}</span>
-                <span className="text-[10px] text-zinc-500 truncate">{isAdmin ? 'Admin' : 'Member'}</span>
+                <span className="text-[10px] text-zinc-500 truncate">{isAdmin ? t("common.admin_role") : t("common.member_role")}</span>
               </div>
             </div>
           )}
         </div>
       </aside>
+
+      {/* Floating Action Button - Mobile only, navigates to last tapped content */}
+      {isFabValid && (
+        <div className="md:hidden">
+          <button
+            ref={fabRef}
+            className="fixed z-[55] w-14 h-14 rounded-full shadow-2xl flex items-center justify-center transition-shadow active:shadow-lg touch-none select-none"
+            style={{
+              left: fabPosition.x === -1 ? undefined : fabPosition.x,
+              bottom: fabPosition.y === -1 ? undefined : fabPosition.y,
+              right: fabPosition.x === -1 ? '1rem' : undefined,
+              ...(fabPosition.y === -1 ? { bottom: '5.5rem' } : {}),
+              background: 'linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)))',
+            }}
+            data-testid="fab-navigate-back"
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              const rect = fabRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              fabDragRef.current = {
+                isDragging: false,
+                startX: touch.clientX,
+                startY: touch.clientY,
+                startPosX: rect.left,
+                startPosY: window.innerHeight - rect.bottom,
+              };
+            }}
+            onTouchMove={(e) => {
+              const touch = e.touches[0];
+              const dx = touch.clientX - fabDragRef.current.startX;
+              const dy = touch.clientY - fabDragRef.current.startY;
+              if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+                fabDragRef.current.isDragging = true;
+              }
+              if (fabDragRef.current.isDragging) {
+                e.preventDefault();
+                const newX = Math.max(0, Math.min(window.innerWidth - 56, fabDragRef.current.startPosX + dx));
+                const newY = Math.max(64, Math.min(window.innerHeight - 120, fabDragRef.current.startPosY - dy));
+                setFabPosition({ x: newX, y: newY });
+              }
+            }}
+            onTouchEnd={() => {
+              if (!fabDragRef.current.isDragging && lastTappedContent) {
+                setTab(lastTappedContent.tab);
+                setTimeout(() => {
+                  const el = document.querySelector(`[data-content-id="${lastTappedContent.contentId}"]`);
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 150);
+              }
+              fabDragRef.current.isDragging = false;
+            }}
+            onClick={() => {
+              if (lastTappedContent) {
+                setTab(lastTappedContent.tab);
+                setTimeout(() => {
+                  const el = document.querySelector(`[data-content-id="${lastTappedContent.contentId}"]`);
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 150);
+              }
+            }}
+          >
+            <ArrowUp className="w-5 h-5 text-white" />
+          </button>
+        </div>
+      )}
 
       <div className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-[#0a0a0b]/95 backdrop-blur-xl border-t border-zinc-800/60">
         <div className="flex items-center justify-around px-2 py-2">
@@ -1204,7 +1352,7 @@ export default function ExplorePage() {
               AFRO<span className="text-primary mx-[3px]">•</span>KAVIAR
             </span>
           </div>
-          <div className="relative flex-1 max-w-xl mx-auto">
+          <div className="relative flex-1 max-w-xl mx-auto hidden md:block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/45" />
             <Input
               value={query}
@@ -1215,6 +1363,13 @@ export default function ExplorePage() {
             />
           </div>
           <div className="flex items-center gap-3 ml-4">
+            <button
+              onClick={() => setMobileSearchOpen(true)}
+              className="md:hidden h-9 w-9 rounded-full flex items-center justify-center bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
+              data-testid="button-mobile-search"
+            >
+              <Search size={15} />
+            </button>
             <div className="relative" ref={themePanelRef}>
               <button
                 onClick={() => setShowThemePanel(!showThemePanel)}
@@ -1256,6 +1411,15 @@ export default function ExplorePage() {
                 </div>
               )}
             </div>
+            {isAuthenticated && (
+              <button
+                onClick={() => setShowBookmarks(!showBookmarks)}
+                className={`h-9 w-9 rounded-full flex items-center justify-center text-sm transition-all border ${showBookmarks ? 'bg-[hsl(var(--primary))]/20 text-[hsl(var(--primary))] border-[hsl(var(--primary))]/30' : 'bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border-white/10'}`}
+                data-testid="button-bookmarks-toggle"
+              >
+                <Bookmark className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={toggleLang}
               className="h-9 px-3 rounded-full text-xs font-bold bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
@@ -1309,6 +1473,206 @@ export default function ExplorePage() {
           </div>
         </header>
 
+        {/* Mobile Search Overlay */}
+        {mobileSearchOpen && (
+          <div className="fixed inset-0 z-50 md:hidden" data-testid="overlay-mobile-search">
+            <div
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+              onClick={() => { setMobileSearchOpen(false); }}
+            />
+            <div className="relative z-10 flex flex-col h-full px-4 pt-4 pb-6 pointer-events-none">
+              <div className="pointer-events-auto">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/45" />
+                    <Input
+                      autoFocus
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder={t("search.placeholder")}
+                      className="h-11 w-full pl-9 bg-zinc-900/80 border-zinc-700/60 text-white placeholder:text-white/35 rounded-full"
+                      data-testid="input-mobile-search"
+                    />
+                  </div>
+                  <button
+                    onClick={() => { setMobileSearchOpen(false); setQuery(""); }}
+                    className="h-9 w-9 rounded-full flex items-center justify-center bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all shrink-0"
+                    data-testid="button-close-mobile-search"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {query.trim().length > 0 && (
+                  <div className="bg-zinc-900/90 border border-zinc-700/50 rounded-2xl p-3 max-h-[70vh] overflow-y-auto space-y-1">
+                    {(() => {
+                      const q = query.trim().toLowerCase();
+                      const results: { type: string; icon: React.ReactNode; label: string; action: () => void }[] = [];
+
+                      filteredTv.filter(c => c.name.toLowerCase().includes(q)).slice(0, 5).forEach(c => {
+                        results.push({
+                          type: "tv",
+                          icon: <Tv className="w-4 h-4 text-cyan-400 shrink-0" />,
+                          label: c.name,
+                          action: () => { setTab("radio-tv"); setPlayingChannelId(c.id); setMobileSearchOpen(false); setQuery(""); },
+                        });
+                      });
+
+                      filteredSongs.filter(s => `${s.title} ${s.artist}`.toLowerCase().includes(q)).slice(0, 5).forEach(s => {
+                        results.push({
+                          type: "music",
+                          icon: <Music className="w-4 h-4 text-amber-400 shrink-0" />,
+                          label: `${s.title} — ${s.artist}`,
+                          action: () => { setTab("music"); setMobileSearchOpen(false); },
+                        });
+                      });
+
+                      filteredSocial.filter((t: any) => t.title.toLowerCase().includes(q)).slice(0, 3).forEach((t: any) => {
+                        results.push({
+                          type: "social",
+                          icon: <Headphones className="w-4 h-4 text-purple-400 shrink-0" />,
+                          label: t.title,
+                          action: () => { setTab("social"); setMobileSearchOpen(false); },
+                        });
+                      });
+
+                      const libQ = allLibraryItems.filter((item: any) => {
+                        const meta = item.metadata as any;
+                        const name = meta?.name || meta?.title || item.type || "";
+                        return name.toLowerCase().includes(q);
+                      }).slice(0, 5);
+                      libQ.forEach((item: any) => {
+                        const meta = item.metadata as any;
+                        const name = meta?.name || meta?.title || item.type || "File";
+                        const ct = (meta?.contentType || "") as string;
+                        let icon = <FileText className="w-4 h-4 text-zinc-400 shrink-0" />;
+                        if (ct.startsWith("audio")) icon = <Music className="w-4 h-4 text-amber-400 shrink-0" />;
+                        else if (ct.startsWith("video")) icon = <Video className="w-4 h-4 text-rose-400 shrink-0" />;
+                        else if (ct.startsWith("image")) icon = <ImageIcon className="w-4 h-4 text-emerald-400 shrink-0" />;
+                        else if (ct.includes("pdf")) icon = <FileText className="w-4 h-4 text-orange-400 shrink-0" />;
+                        results.push({
+                          type: "library",
+                          icon,
+                          label: name,
+                          action: () => { setTab("library"); setMobileSearchOpen(false); },
+                        });
+                      });
+
+                      if (results.length === 0) {
+                        return (
+                          <div className="text-center py-6 text-white/30 text-sm">
+                            {t("common.no_results")} "{query}"
+                          </div>
+                        );
+                      }
+
+                      return results.map((r, i) => (
+                        <button
+                          key={`${r.type}-${i}`}
+                          onClick={r.action}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-white/10 transition-colors"
+                          data-testid={`search-result-${r.type}-${i}`}
+                        >
+                          {r.icon}
+                          <span className="text-sm text-white truncate">{r.label}</span>
+                          <span className="ml-auto text-[10px] uppercase tracking-wider text-white/30 shrink-0">{r.type}</span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showBookmarks && (
+          <div className="border-b border-zinc-800/60 bg-[#0a0a0b]/95 backdrop-blur-xl">
+            <div className="mx-auto w-full max-w-6xl px-6 py-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2" data-testid="text-bookmarks-title">
+                  <Bookmark className="w-4 h-4 text-[hsl(var(--primary))]" />
+                  {t("saved.title") || "Saved Items"}
+                  <span className="text-xs text-zinc-500 font-normal">({savedItemsData.length}/100)</span>
+                </h3>
+                <button onClick={() => setShowBookmarks(false)} className="text-zinc-500 hover:text-white p-1" data-testid="button-bookmarks-close">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {savedItemsData.length > 0 && (
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+                    <input
+                      type="text"
+                      value={bookmarkSearch}
+                      onChange={(e) => setBookmarkSearch(e.target.value)}
+                      placeholder={lang === "fr" ? "Rechercher..." : "Search saved..."}
+                      className="w-full pl-8 pr-3 py-1.5 bg-zinc-900 border border-zinc-700/50 rounded-lg text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-[hsl(var(--primary))]/50"
+                      data-testid="input-bookmarks-search"
+                    />
+                  </div>
+                  <select
+                    value={bookmarkSort}
+                    onChange={(e) => setBookmarkSort(e.target.value as "newest" | "oldest" | "type")}
+                    className="bg-zinc-900 border border-zinc-700/50 rounded-lg text-xs text-white px-2 py-1.5 focus:outline-none"
+                    data-testid="select-bookmarks-sort"
+                  >
+                    <option value="newest">{lang === "fr" ? "Récent" : "Newest"}</option>
+                    <option value="oldest">{lang === "fr" ? "Ancien" : "Oldest"}</option>
+                    <option value="type">Type</option>
+                  </select>
+                </div>
+              )}
+              {savedItemsData.length === 0 ? (
+                <p className="text-zinc-500 text-sm py-4 text-center" data-testid="text-bookmarks-empty">{t("saved.empty") || "No saved items yet"}</p>
+              ) : filteredSavedItems.length === 0 ? (
+                <p className="text-zinc-500 text-sm py-4 text-center" data-testid="text-bookmarks-no-results">{lang === "fr" ? "Aucun résultat" : "No results"}</p>
+              ) : (
+                <div className="space-y-1.5 max-h-[40vh] overflow-y-auto scrollbar-custom" data-testid="list-bookmarks">
+                  {filteredSavedItems.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-all group" data-testid={`row-bookmark-${item.id}`}>
+                      <button
+                        className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                        data-testid={`button-bookmark-navigate-${item.id}`}
+                        onClick={() => {
+                          const targetTab = item.contentType === "channel" ? "radio-tv" : item.contentType === "song" ? "music" : "social";
+                          setTab(targetTab);
+                          setShowBookmarks(false);
+                          setTimeout(() => {
+                            const contentId = item.contentType === "channel" ? item.contentId : `${item.contentType}-${item.contentId}`;
+                            const el = document.querySelector(`[data-content-id="${contentId}"]`);
+                            el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 200);
+                        }}
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                          {item.contentType === "post" && <MessageCircle className="w-3.5 h-3.5 text-zinc-400" />}
+                          {item.contentType === "track" && <Music className="w-3.5 h-3.5 text-zinc-400" />}
+                          {item.contentType === "clip" && <Video className="w-3.5 h-3.5 text-zinc-400" />}
+                          {item.contentType === "channel" && <Tv className="w-3.5 h-3.5 text-zinc-400" />}
+                          {item.contentType === "song" && <Music2 className="w-3.5 h-3.5 text-zinc-400" />}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-sm text-white truncate block">{item.title}</span>
+                          <span className="text-[10px] text-zinc-500 uppercase tracking-wider">{item.contentType}</span>
+                        </div>
+                      </button>
+                      <button
+                        className="p-1.5 rounded-full text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                        onClick={() => toggleSaveItem(item.contentType, item.contentId, item.title)}
+                        data-testid={`button-bookmark-remove-${item.id}`}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto pb-20 md:pb-6">
           <div className="mx-auto w-full max-w-6xl px-6 py-6">
             <Tabs value={tab} onValueChange={setTab}>
@@ -1329,7 +1693,7 @@ export default function ExplorePage() {
                           <div className="text-xs text-white/55" data-testid="text-player-subtitle">
                             {activeChannel
                               ? `${activeChannel.country} • ${activeChannel.channelGroup}`
-                              : "Select a TV channel or switch to Radio."}
+                              : t("radio.select_channel")}
                           </div>
                         </div>
 {activeChannel && (
@@ -1455,7 +1819,7 @@ export default function ExplorePage() {
                               <div className="absolute -top-16 -right-16 w-48 h-48 bg-accent/5 blur-[80px] pointer-events-none group-hover:bg-accent/10 transition-colors duration-1000" />
                               <div className="absolute top-6 right-4 z-10 flex items-center space-x-2">
                                 <span className="flex h-2 w-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.5)]" />
-                                <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">On Air</span>
+                                <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">{t("radio.on_air")}</span>
                               </div>
                             </div>
                           </div>
@@ -1463,7 +1827,7 @@ export default function ExplorePage() {
                           {isAdmin && (
                             <div className="mt-3 grid gap-2">
                               <Label className="text-xs text-white/55" data-testid="label-radio-embed">
-                                Paste Radiolise embed code
+                                {t("radio.paste_embed")}
                               </Label>
                               <textarea
                                 value={radioEmbedCode}
@@ -1480,7 +1844,7 @@ export default function ExplorePage() {
                     <div className="lg:col-span-2 text-white/80">
                       <div>
                         <div className="font-display text-lg text-white" data-testid="text-tv-list-title">
-                          TV Channels
+                          {t("radio.tv_channels")}
                         </div>
                         <div className="text-xs text-white/55" data-testid="text-tv-count">
                           {tvLoading ? "Loading..." : `${filteredTv.length} channels`}
@@ -1492,7 +1856,7 @@ export default function ExplorePage() {
                           <div className="grid grid-cols-2 gap-3">
                             <div>
                               <Label className="text-xs text-white/55" data-testid="label-tv-country">
-                                Country
+                                {t("radio.country")}
                               </Label>
                               <Select value={tvCountry} onValueChange={setTvCountry}>
                                 <SelectTrigger className="mt-1 h-10 bg-[#101116] border-0 text-white hover:bg-[#101116]" data-testid="select-tv-country">
@@ -1509,7 +1873,7 @@ export default function ExplorePage() {
                             </div>
                             <div>
                               <Label className="text-xs text-white/55" data-testid="label-tv-group">
-                                Content Type
+                                {t("radio.content_type")}
                               </Label>
                               <Select value={tvGroup} onValueChange={setTvGroup}>
                                 <SelectTrigger className="mt-1 h-10 bg-[#101116] border-0 text-white hover:bg-[#101116]" data-testid="select-tv-group">
@@ -1536,7 +1900,7 @@ export default function ExplorePage() {
                         <div className="flex-1 overflow-y-auto scrollbar-custom" style={{ scrollbarColor: '#161820 transparent', scrollbarWidth: 'thin' }} data-testid="list-tv">
                         {tvLoading ? (
                           <div className="p-4 text-sm text-white/60" data-testid="status-tv-loading">
-                            Loading channels from the sheet...
+                            {t("radio.loading")}
                           </div>
                         ) : (
                           <div className="divide-y divide-white/10">
@@ -1549,8 +1913,9 @@ export default function ExplorePage() {
                                     "w-full text-left px-3 py-3 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] " +
                                     (active ? "bg-white/5" : "")
                                   }
-                                  onClick={() => { setStreamError(null); setPlayingChannelId(c.id); setTimeout(() => { const el = tvPlayerRef.current; if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, 150); }}
+                                  onClick={() => { setStreamError(null); setPlayingChannelId(c.id); recordTap("radio-tv", c.id, "channel", c.name); setTimeout(() => { const el = tvPlayerRef.current; if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, 150); }}
                                   data-testid={`row-tv-channel-${c.id}`}
+                                  data-content-id={c.id}
                                 >
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
@@ -1610,10 +1975,10 @@ export default function ExplorePage() {
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-live-title">
-                          Live
+                          {t("live.title")}
                         </h1>
                         <p className="text-zinc-400 text-sm font-medium max-w-md leading-relaxed" data-testid="text-live-desc">
-                          Featured live shows and podcast sessions — timed events with RSVP and ticketing.
+                          {t("live.desc")}
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -1622,7 +1987,7 @@ export default function ExplorePage() {
                           data-testid="button-live-notify"
                         >
                           <Bell className="w-4 h-4" />
-                          <span>Get Notified</span>
+                          <span>{t("live.get_notified")}</span>
                         </button>
                       </div>
                     </div>
@@ -1632,35 +1997,35 @@ export default function ExplorePage() {
                         <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-4">
                           <RadioIcon className="w-8 h-8 text-primary" />
                         </div>
-                        <h2 className="text-2xl font-bold text-white mb-2">Coming Soon</h2>
+                        <h2 className="text-2xl font-bold text-white mb-2">{t("live.coming_soon")}</h2>
                         <p className="text-zinc-400 text-sm max-w-md mx-auto">
-                          Live streaming events, artist premieres, and interactive sessions are on the way.
+                          {t("live.coming_soon_desc")}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
-                        <span className="text-zinc-600">Total: 3 upcoming events</span>
+                        <span className="text-zinc-600">{t("common.total")}: 3 {t("live.upcoming")}</span>
                       </div>
                       <div className="flex items-center space-x-2 text-zinc-600">
-                        <span>Stay tuned</span>
+                        <span>{t("live.stay_tuned")}</span>
                       </div>
                     </div>
 
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden">
                       <div className="grid grid-cols-[60px_1fr_100px_100px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
                         <div className="text-center">#</div>
-                        <div>Event / Description</div>
-                        <div className="hidden sm:block px-4">Date</div>
-                        <div className="text-right pr-2">Action</div>
+                        <div>{t("live.event_desc")}</div>
+                        <div className="hidden sm:block px-4">{t("live.date")}</div>
+                        <div className="text-right pr-2">{t("live.action")}</div>
                       </div>
 
                       <div className="divide-y divide-zinc-800/40">
                         {[
-                          { title: "Diaspora Lounge Session", date: "Coming Soon", desc: "A weekly curated live stream." },
-                          { title: "Artist Drop Premiere", date: "Coming Soon", desc: "Timed releases with chat & replay." },
-                          { title: "Afrobeats Live Showcase", date: "Coming Soon", desc: "Live performances from top artists." },
+                          { title: t("live.diaspora_lounge"), date: t("live.coming_soon"), desc: t("live.diaspora_desc") },
+                          { title: t("live.artist_drop"), date: t("live.coming_soon"), desc: t("live.artist_desc") },
+                          { title: t("live.afrobeats"), date: t("live.coming_soon"), desc: t("live.afrobeats_desc") },
                         ].map((e, idx) => (
                           <div 
                             key={idx}
@@ -1698,7 +2063,7 @@ export default function ExplorePage() {
                                 className="px-4 py-2 text-xs font-bold bg-zinc-800 text-white rounded-full hover:bg-zinc-700 transition-all border border-zinc-700"
                                 data-testid={`button-live-remind-${idx}`}
                               >
-                                Remind me
+                                {t("live.remind_me")}
                               </button>
                             </div>
                           </div>
@@ -1714,10 +2079,10 @@ export default function ExplorePage() {
                     <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                       <div className="space-y-1">
                         <h1 className="text-4xl font-extrabold tracking-tighter text-white" data-testid="text-music-title">
-                          Music
+                          {t("music.title")}
                         </h1>
                         <p className="text-zinc-400 text-sm font-medium max-w-md leading-relaxed" data-testid="text-music-desc">
-                          Discover curated tracks from African artists. Preview any song for 60 seconds, then purchase for just $1 to keep it forever.
+                          {t("music.desc_full")}
                         </p>
                       </div>
                       <div className="flex items-center gap-3">
@@ -1726,8 +2091,8 @@ export default function ExplorePage() {
                             <SelectValue placeholder="Filter" />
                           </SelectTrigger>
                           <SelectContent className="bg-zinc-900 border-zinc-700 text-white">
-                            <SelectItem value="all" data-testid="option-music-filter-all">All</SelectItem>
-                            <SelectItem value="favorites" data-testid="option-music-filter-favorites">Favourites</SelectItem>
+                            <SelectItem value="all" data-testid="option-music-filter-all">{t("common.all")}</SelectItem>
+                            <SelectItem value="favorites" data-testid="option-music-filter-favorites">{t("music.favourites")}</SelectItem>
                           </SelectContent>
                         </Select>
                         {isAdmin && (
@@ -1737,38 +2102,69 @@ export default function ExplorePage() {
                             onClick={() => setShowMusicUploadDialog(true)}
                           >
                             <Upload className="w-4 h-4" />
-                            <span>Upload Song</span>
+                            <span>{t("music.upload_song")}</span>
                           </button>
                         )}
                       </div>
                     </div>
 
+                    {nowPlaying && (
+                      <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-4 mb-4 flex items-center justify-between" data-testid="panel-music-player">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50">
+                            <Music className="w-5 h-5 text-primary" />
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">{t("music.now_playing")}</div>
+                            <div className="font-bold text-white text-sm truncate max-w-[250px]">{nowPlaying}</div>
+                          </div>
+                        </div>
+                        <button
+                          className={`p-2.5 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-primary text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
+                          data-testid="button-music-toggleplay"
+                          onClick={() => {
+                            if (audioRef.current) {
+                              if (isPlaying) {
+                                audioRef.current.pause();
+                                setIsPlaying(false);
+                              } else {
+                                audioRef.current.play().catch(() => {});
+                                setIsPlaying(true);
+                              }
+                            }
+                          }}
+                        >
+                          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
-                        <span className="text-zinc-600">Total: {filteredSongs.length} tracks</span>
+                        <span className="text-zinc-600">{t("common.total")}: {filteredSongs.length} {t("music.total_tracks")}</span>
                       </div>
                       <div className="flex items-center space-x-2 text-zinc-600">
                         <Clock className="w-3.5 h-3.5" />
-                        <span>Purchase and keep forever</span>
+                        <span>{t("music.purchase_keep")}</span>
                       </div>
                     </div>
 
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
                       <div className="grid grid-cols-[60px_1fr_80px_100px_140px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
                         <div className="text-center">#</div>
-                        <div>Title / Artist</div>
-                        <div className="hidden sm:block px-2">Time</div>
-                        <div className="hidden md:block px-2">Genre</div>
-                        <div className="text-right pr-2">Actions</div>
+                        <div>{t("library.title_artist")}</div>
+                        <div className="hidden sm:block px-2">{t("library.time")}</div>
+                        <div className="hidden md:block px-2">{t("library.genre")}</div>
+                        <div className="text-right pr-2">{t("library.actions")}</div>
                       </div>
                       <div className="divide-y divide-zinc-800/40">
                         {songsLoading ? (
                           <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-music-loading">
-                            Loading songs...
+                            {t("music.loading")}
                           </div>
                         ) : filteredSongs.length === 0 ? (
                           <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-music-empty">
-                            No songs found
+                            {t("music.no_songs")}
                           </div>
                         ) : (
                           filteredSongs.map((s, index) => {
@@ -1780,6 +2176,7 @@ export default function ExplorePage() {
                                 key={s.id}
                                 className="group grid grid-cols-[60px_1fr_80px_100px_140px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
                                 data-testid={`row-song-${s.id}`}
+                                data-content-id={`song-${s.id}`}
                               >
                                 <div className="flex justify-center">
                                   <div className="relative w-9 h-9 flex items-center justify-center">
@@ -1788,10 +2185,14 @@ export default function ExplorePage() {
                                     </span>
                                     <button 
                                       className="absolute opacity-0 group-hover:opacity-100 bg-primary rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-primary/90"
-                                      onClick={() => togglePlayMock(s.title)}
+                                      onClick={() => { togglePlaySong(s.id, `${s.title} — ${s.artist}`, s.audioUrl); recordTap("music", `song-${s.id}`, "song", s.title); }}
                                       data-testid={`button-song-play-${s.id}`}
                                     >
-                                      <Play className="w-4 h-4 fill-current ml-0.5" />
+                                      {nowPlayingId === s.id && isPlaying ? (
+                                        <Pause className="w-4 h-4 fill-current" />
+                                      ) : (
+                                        <Play className="w-4 h-4 fill-current ml-0.5" />
+                                      )}
                                     </button>
                                   </div>
                                 </div>
@@ -1812,12 +2213,12 @@ export default function ExplorePage() {
                                       </span>
                                       {isNew(s.createdAt) && (
                                         <Badge className="bg-primary/20 text-primary border border-primary/30 text-[10px]" data-testid={`badge-song-new-${s.id}`}>
-                                          New
+                                          {t("music.new")}
                                         </Badge>
                                       )}
                                       {ownedSongs[s.id] && (
                                         <Badge className="bg-primary/20 text-primary border border-primary/30 text-[10px]" data-testid={`badge-song-owned-${s.id}`}>
-                                          Owned
+                                          {t("music.owned")}
                                         </Badge>
                                       )}
                                       {!ownedSongs[s.id] && isPaid && (
@@ -1889,7 +2290,7 @@ export default function ExplorePage() {
                                       disabled
                                       data-testid={`button-song-owned-${s.id}`}
                                     >
-                                      Owned
+                                      {t("music.owned")}
                                     </button>
                                   ) : isPaid ? (
                                     <button
@@ -1912,7 +2313,7 @@ export default function ExplorePage() {
                                       disabled
                                       data-testid={`button-song-inlibrary-${s.id}`}
                                     >
-                                      In Library
+                                      {t("music.in_library")}
                                     </button>
                                   ) : (
                                     <button
@@ -1927,7 +2328,7 @@ export default function ExplorePage() {
                                         addFreeSongMutation.mutate({ id: s.id, title: s.title, artist: s.artist });
                                       }}
                                     >
-                                      {addFreeSongMutation.isPending ? "..." : "Add to Library"}
+                                      {addFreeSongMutation.isPending ? "..." : t("music.add_to_library")}
                                     </button>
                                   )}
                                   {isAdmin && (
@@ -1996,7 +2397,7 @@ export default function ExplorePage() {
                         className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
                           socialView === "posts"
                             ? "bg-accent text-black"
-                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                            : "bg-zinc-800/60 text-zinc-200 hover:text-white hover:bg-zinc-700/60"
                         }`}
                         data-testid="button-social-posts"
                       >
@@ -2007,7 +2408,7 @@ export default function ExplorePage() {
                         className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
                           socialView === "tracks"
                             ? "bg-accent text-black"
-                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                            : "bg-zinc-800/60 text-zinc-200 hover:text-white hover:bg-zinc-700/60"
                         }`}
                         data-testid="button-social-tracks"
                       >
@@ -2018,7 +2419,7 @@ export default function ExplorePage() {
                         className={`px-5 py-2 rounded-full text-sm font-bold transition-all ${
                           socialView === "clips"
                             ? "bg-accent text-black"
-                            : "bg-zinc-800/60 text-zinc-400 hover:text-white hover:bg-zinc-700/60"
+                            : "bg-zinc-800/60 text-zinc-200 hover:text-white hover:bg-zinc-700/60"
                         }`}
                         data-testid="button-social-clips"
                       >
@@ -2077,6 +2478,13 @@ export default function ExplorePage() {
 
                     {socialView === "posts" && (
                       <div className="max-w-3xl mx-auto space-y-8">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
+                          <span className="text-zinc-600">Total: {socialPostsData.length} posts</span>
+                          <div className="flex items-center space-x-2 text-zinc-600">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Last Sync: Just now</span>
+                          </div>
+                        </div>
                         {isAuthenticated && (
                           <div className="bg-[#121214] border border-zinc-800/80 rounded-[2rem] p-6 shadow-2xl" data-testid="social-post-composer">
                             <p className="text-xs text-zinc-500 font-medium mb-3 uppercase tracking-widest">{t("social.posts")} · {t("social.audio")} · {t("social.image")} · {t("social.video")}</p>
@@ -2091,11 +2499,17 @@ export default function ExplorePage() {
                               <div className="flex-1">
                                 <textarea 
                                   placeholder={t("social.post_placeholder")}
-                                  className="w-full bg-transparent border-none resize-none focus:ring-0 text-lg placeholder:text-zinc-600 pt-2 h-24 outline-none"
+                                  className="w-full bg-transparent border-none resize-none focus:ring-0 text-sm text-foreground placeholder:text-zinc-500 pt-2 h-24 outline-none leading-snug"
                                   value={postText}
-                                  onChange={(e) => setPostText(e.target.value)}
+                                  onChange={(e) => { if (e.target.value.length <= 3600) setPostText(e.target.value); }}
+                                  maxLength={3600}
                                   data-testid="input-social-post-text"
                                 />
+                                {postText.length > 0 && (
+                                  <div className={`text-right text-[11px] font-mono mt-0.5 ${postText.length > 3400 ? 'text-red-400' : postText.length > 3000 ? 'text-amber-400' : 'text-zinc-500'}`} data-testid="text-post-char-count">
+                                    {3600 - postText.length} {t("common.characters_left")}
+                                  </div>
+                                )}
                                 {postImagePreview && (
                                   <div className="relative mt-2 rounded-xl overflow-hidden border border-zinc-800/50">
                                     <img src={postImagePreview} alt="Preview" className="w-full max-h-64 object-cover" />
@@ -2129,6 +2543,19 @@ export default function ExplorePage() {
                                       className="text-zinc-500 hover:text-white transition-colors"
                                       onClick={() => setPostVideoFile(null)}
                                       data-testid="button-post-video-remove"
+                                    >
+                                      <Plus className="w-4 h-4 rotate-45" />
+                                    </button>
+                                  </div>
+                                )}
+                                {postLinkUrl && (
+                                  <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-zinc-900 rounded-xl border border-zinc-800/50">
+                                    <Link2 className="w-4 h-4 text-emerald-400" />
+                                    <span className="text-sm text-zinc-300 truncate flex-1">{postLinkUrl}</span>
+                                    <button
+                                      className="text-zinc-500 hover:text-white transition-colors"
+                                      onClick={() => setPostLinkUrl("")}
+                                      data-testid="button-post-link-remove"
                                     >
                                       <Plus className="w-4 h-4 rotate-45" />
                                     </button>
@@ -2176,38 +2603,52 @@ export default function ExplorePage() {
                               data-testid="input-post-video-file"
                             />
                             <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800/50">
-                              <div className="flex space-x-2">
-                                <button
-                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-blue-400"
-                                  onClick={() => postImageInputRef.current?.click()}
-                                  data-testid="button-post-image"
-                                >
-                                  <ImageIcon className="w-4 h-4" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.image")}</span>
-                                </button>
+                              <div className="flex items-center space-x-2">
                                 <button 
-                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-accent"
-                                  onClick={() => postAudioInputRef.current?.click()}
-                                  data-testid="button-post-audio"
-                                >
-                                  <Play className="w-4 h-4" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.audio")}</span>
-                                </button>
-                                <button 
-                                  className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-purple-400"
+                                  className="flex items-center md:space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-purple-400"
                                   onClick={() => postVideoInputRef.current?.click()}
                                   data-testid="button-post-video"
                                 >
                                   <Video className="w-4 h-4" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.video")}</span>
+                                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.video")}</span>
                                 </button>
+                                <button
+                                  className="flex items-center md:space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-blue-400"
+                                  onClick={() => postImageInputRef.current?.click()}
+                                  data-testid="button-post-image"
+                                >
+                                  <ImageIcon className="w-4 h-4" />
+                                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.image")}</span>
+                                </button>
+                                <button 
+                                  className="flex items-center md:space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-accent"
+                                  onClick={() => postAudioInputRef.current?.click()}
+                                  data-testid="button-post-audio"
+                                >
+                                  <Play className="w-4 h-4" />
+                                  <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest text-zinc-400">{t("social.audio")}</span>
+                                </button>
+                                <div className="h-5 w-px bg-zinc-700/50" />
+                                <div className="relative group/link">
+                                  <button 
+                                    className="flex items-center md:space-x-2 px-3 py-1.5 rounded-xl hover:bg-zinc-800 transition-colors text-emerald-400"
+                                    onClick={() => {
+                                      const url = prompt("Paste a link (YouTube, Instagram, or any URL):");
+                                      if (url && url.trim()) setPostLinkUrl(url.trim());
+                                    }}
+                                    data-testid="button-post-link"
+                                  >
+                                    <Link2 className="w-4 h-4" />
+                                    <span className="hidden md:inline text-[10px] font-black uppercase tracking-widest text-zinc-400">Link</span>
+                                  </button>
+                                </div>
                               </div>
                               <button 
-                                className="bg-accent hover:bg-accent/80 text-black px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="bg-accent hover:bg-accent/80 text-black px-4 md:px-8 py-2.5 rounded-full font-black text-sm transition-all transform active:scale-95 shadow-lg shadow-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
                                 data-testid="button-post-submit"
-                                disabled={isPostSubmitting || (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile)}
+                                disabled={isPostSubmitting || (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile && !postLinkUrl)}
                                 onClick={async () => {
-                                  if (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile) return;
+                                  if (!postText.trim() && !postImageFile && !postAudioFile && !postVideoFile && !postLinkUrl) return;
                                   setIsPostSubmitting(true);
                                   try {
                                     let imageUrl: string | null = null;
@@ -2257,7 +2698,7 @@ export default function ExplorePage() {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
                                       credentials: "include",
-                                      body: JSON.stringify({ textContent: postText.trim() || null, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl }),
+                                      body: JSON.stringify({ textContent: postText.trim() || null, imageUrl, audioUrl, audioTitle, audioDuration, videoUrl, linkUrl: postLinkUrl || null }),
                                     });
                                     if (!res.ok) throw new Error("Failed to create post");
 
@@ -2266,6 +2707,7 @@ export default function ExplorePage() {
                                     setPostImagePreview(null);
                                     setPostAudioFile(null);
                                     setPostVideoFile(null);
+                                    setPostLinkUrl("");
                                     refetchSocialPosts();
                                     toast({ title: "Posted!", description: "Your post is now live." });
                                   } catch (err) {
@@ -2281,19 +2723,11 @@ export default function ExplorePage() {
                           </div>
                         )}
 
-                        <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
-                          <span className="text-zinc-600">Total: {socialPostsData.length} posts</span>
-                          <div className="flex items-center space-x-2 text-zinc-600">
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>Last Sync: Just now</span>
-                          </div>
-                        </div>
-
                         {socialPostsData.map((post) => {
                           const liked = !!postLikes[post.id];
                           const isSocialPlaying = socialPlayingId === post.id;
                           return (
-                            <article key={post.id} className="bg-[#121214] border border-zinc-800/60 rounded-[2.5rem] overflow-hidden shadow-2xl transition-all hover:border-zinc-700/50" data-testid={`card-social-post-${post.id}`}>
+                            <article key={post.id} className="bg-[#121214] border border-zinc-800/60 rounded-[2.5rem] overflow-hidden shadow-2xl transition-all hover:border-zinc-700/50" data-testid={`card-social-post-${post.id}`} data-content-id={`post-${post.id}`}>
                               <div className="p-8">
                                 <div className="flex items-center justify-between mb-6">
                                   <div className="flex items-center space-x-4">
@@ -2335,11 +2769,39 @@ export default function ExplorePage() {
                                   )}
                                 </div>
 
-                                {post.textContent && (
-                                  <p className="text-zinc-200 text-lg leading-relaxed mb-6 font-medium" data-testid={`text-post-content-${post.id}`}>
-                                    {post.textContent}
-                                  </p>
-                                )}
+                                {post.textContent && (() => {
+                                  const MAX_LINES = 5;
+                                  const lines = post.textContent.split('\n');
+                                  const isLong = lines.length > MAX_LINES || post.textContent.length > 400;
+                                  const isExpanded = expandedPosts[post.id];
+                                  return (
+                                    <div className="mb-4" data-testid={`text-post-content-${post.id}`}>
+                                      <p className={`text-zinc-200 text-sm leading-snug font-medium whitespace-pre-wrap ${!isExpanded && isLong ? 'line-clamp-5' : ''}`}>
+                                        {post.textContent}
+                                      </p>
+                                      {isLong && !isExpanded && (
+                                        <button
+                                          className="mt-1.5 flex items-center gap-1 text-xs font-bold text-[var(--color-accent)] hover:opacity-80 transition-opacity"
+                                          onClick={() => setExpandedPosts(prev => ({ ...prev, [post.id]: true }))}
+                                          data-testid={`button-expand-post-${post.id}`}
+                                        >
+                                          <ChevronDown className="w-3.5 h-3.5 animate-bounce" />
+                                          <span>{t("common.read_more")}</span>
+                                        </button>
+                                      )}
+                                      {isLong && isExpanded && (
+                                        <button
+                                          className="mt-1.5 flex items-center gap-1 text-xs font-bold text-[var(--color-accent)] hover:opacity-80 transition-opacity"
+                                          onClick={() => setExpandedPosts(prev => ({ ...prev, [post.id]: false }))}
+                                          data-testid={`button-collapse-post-${post.id}`}
+                                        >
+                                          <ChevronUp className="w-3.5 h-3.5" />
+                                          <span>{t("common.show_less")}</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
 
                                 {post.textContent && extractYouTubeId(post.textContent) && (
                                   <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
@@ -2356,7 +2818,7 @@ export default function ExplorePage() {
                                 )}
 
                                 {post.imageUrl && (
-                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
+                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50 cursor-pointer" onClick={() => setLightboxImage(post.imageUrl!)}>
                                     <img src={post.imageUrl} alt="" className="w-full max-h-[500px] object-cover" data-testid={`img-post-image-${post.id}`} />
                                   </div>
                                 )}
@@ -2369,6 +2831,49 @@ export default function ExplorePage() {
                                       className="w-full max-h-[500px]"
                                       data-testid={`video-post-${post.id}`}
                                     />
+                                  </div>
+                                )}
+
+                                {post.linkUrl && (
+                                  <div className="mb-6" data-testid={`link-embed-${post.id}`}>
+                                    {extractYouTubeId(post.linkUrl) ? (
+                                      <div className="rounded-2xl overflow-hidden border border-zinc-800/50">
+                                        <div className="aspect-video">
+                                          <iframe
+                                            src={`https://www.youtube.com/embed/${extractYouTubeId(post.linkUrl)}?rel=0`}
+                                            className="w-full h-full"
+                                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                            allowFullScreen
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : isInstagramUrl(post.linkUrl) ? (
+                                      <div className="rounded-2xl overflow-hidden border border-zinc-800/50">
+                                        <div className="aspect-square max-h-[500px]">
+                                          <iframe
+                                            src={`https://www.instagram.com/p/${extractInstagramId(post.linkUrl)}/embed`}
+                                            className="w-full h-full"
+                                            allowTransparency
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <a
+                                        href={post.linkUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-3 px-4 py-3 bg-zinc-900/80 rounded-2xl border border-zinc-800/50 hover:border-primary/30 hover:bg-zinc-800/60 transition-all group"
+                                      >
+                                        <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
+                                          <Globe className="w-5 h-5 text-emerald-400" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-sm font-bold text-white group-hover:text-primary truncate">{post.linkUrl}</p>
+                                          <p className="text-[11px] text-zinc-500 uppercase tracking-widest font-bold">External Link</p>
+                                        </div>
+                                        <Link2 className="w-4 h-4 text-zinc-500 group-hover:text-primary shrink-0" />
+                                      </a>
+                                    )}
                                   </div>
                                 )}
 
@@ -2422,6 +2927,7 @@ export default function ExplorePage() {
                                     <button 
                                       className={`flex items-center space-x-2 font-bold text-sm transition-colors ${liked ? 'text-red-500' : 'text-zinc-500 hover:text-white'}`}
                                       onClick={async () => {
+                                        recordTap("social", `post-${post.id}`, "post", post.text?.slice(0, 40) || "Post");
                                         if (!isAuthenticated) {
                                           toast({ title: "Sign in required", description: "Please sign in to like posts.", variant: "destructive" });
                                           return;
@@ -2448,7 +2954,17 @@ export default function ExplorePage() {
                                       onClick={() => toggleComments(post.id)}
                                       data-testid={`button-post-comment-${post.id}`}
                                     >
-                                      <MessageCircle className="w-5 h-5" />
+                                      <MessageCircle className="w-5 h-5" ref={(el: SVGSVGElement | null) => {
+                                        if (!el) return;
+                                        const observer = new IntersectionObserver(([entry]) => {
+                                          if (entry.isIntersecting) {
+                                            el.classList.remove("comment-wiggle-active");
+                                            void (el as unknown as HTMLElement).offsetHeight;
+                                            el.classList.add("comment-wiggle-active");
+                                          }
+                                        }, { threshold: 0.5 });
+                                        observer.observe(el);
+                                      }} />
                                       <span>{post.commentsCount}</span>
                                     </button>
                                     <button 
@@ -2463,6 +2979,13 @@ export default function ExplorePage() {
                                       <span>{t("social.share")}</span>
                                     </button>
                                   </div>
+                                  <button
+                                    className={`text-sm transition-colors ${savedItemsSet.has(`post:${post.id}`) ? 'text-[hsl(var(--primary))]' : 'text-zinc-500 hover:text-white'}`}
+                                    onClick={() => toggleSaveItem("post", post.id, post.text?.slice(0, 60) || "Post")}
+                                    data-testid={`button-post-bookmark-${post.id}`}
+                                  >
+                                    {savedItemsSet.has(`post:${post.id}`) ? <BookmarkCheck className="w-5 h-5 fill-current" /> : <Bookmark className="w-5 h-5" />}
+                                  </button>
                                 </div>
                               </div>
 
@@ -2555,10 +3078,11 @@ export default function ExplorePage() {
                           const saved = !!socialSaved[t.id];
                           const isSocialPlaying = socialPlayingId === t.id;
                           return (
-                            <div key={t.id} className="bg-black/40 rounded-3xl p-5 border border-zinc-800/50 flex items-center justify-between group hover:border-zinc-700/50 transition-all" data-testid={`card-social-track-${t.id}`}>
+                            <div key={t.id} className="bg-black/40 rounded-3xl p-5 border border-zinc-800/50 flex items-center justify-between group hover:border-zinc-700/50 transition-all" data-testid={`card-social-track-${t.id}`} data-content-id={`track-${t.id}`}>
                               <div className="flex items-center space-x-5 flex-1 min-w-0">
                                 <button 
                                   onClick={() => {
+                                    recordTap("social", `track-${t.id}`, "track", t.title);
                                     if (isSocialPlaying) {
                                       setSocialPlayingId(null);
                                       if (audioRef.current) audioRef.current.pause();
@@ -2602,6 +3126,13 @@ export default function ExplorePage() {
                                   data-testid={`button-social-track-save-${t.id}`}
                                 >
                                   <Heart className={`w-4 h-4 ${saved ? 'fill-current' : ''}`} />
+                                </button>
+                                <button
+                                  className={`p-2.5 rounded-full transition-all hover:scale-110 ${savedItemsSet.has(`track:${t.id}`) ? 'text-[hsl(var(--primary))]' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                                  onClick={() => toggleSaveItem("track", t.id, t.title)}
+                                  data-testid={`button-social-track-bookmark-${t.id}`}
+                                >
+                                  {savedItemsSet.has(`track:${t.id}`) ? <BookmarkCheck className="w-4 h-4 fill-current" /> : <Bookmark className="w-4 h-4" />}
                                 </button>
                                 {(user && (user.id === t.uploadedBy || isAdmin)) && (
                                   <button
@@ -2661,7 +3192,7 @@ export default function ExplorePage() {
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           {clipsData.map((clip) => (
-                            <div key={clip.id} className="bg-black/40 rounded-2xl border border-zinc-800/50 overflow-hidden group hover:border-zinc-700/50 transition-all" data-testid={`card-clip-${clip.id}`}>
+                            <div key={clip.id} className="bg-black/40 rounded-2xl border border-zinc-800/50 overflow-hidden group hover:border-zinc-700/50 transition-all" data-testid={`card-clip-${clip.id}`} data-content-id={`clip-${clip.id}`}>
                               <div className="aspect-video bg-black relative">
                                 <video
                                   src={clip.videoUrl}
@@ -2711,6 +3242,13 @@ export default function ExplorePage() {
                                       <Heart className={`w-4 h-4 ${clipLikes[clip.id] ? 'fill-current' : ''}`} />
                                     </button>
                                     <span className="text-xs text-zinc-500">{clip.likesCount}</span>
+                                    <button
+                                      className={`p-1.5 rounded-full transition-all ${savedItemsSet.has(`clip:${clip.id}`) ? 'text-[hsl(var(--primary))]' : 'text-zinc-500 hover:text-white'}`}
+                                      onClick={() => toggleSaveItem("clip", clip.id, clip.title)}
+                                      data-testid={`button-clip-bookmark-${clip.id}`}
+                                    >
+                                      {savedItemsSet.has(`clip:${clip.id}`) ? <BookmarkCheck className="w-3.5 h-3.5 fill-current" /> : <Bookmark className="w-3.5 h-3.5" />}
+                                    </button>
                                     {user && user.id === clip.authorId && (
                                       <button
                                         className="p-1.5 rounded-full text-zinc-500 hover:text-red-400 transition-all ml-1"
@@ -2841,7 +3379,6 @@ export default function ExplorePage() {
                           {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                         </button>
                       </div>
-                      <audio ref={audioRef} onEnded={() => setIsPlaying(false)} />
                     </div>
 
                     <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
@@ -3171,15 +3708,15 @@ export default function ExplorePage() {
                   <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full">
                     <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
                     <span className="text-white text-sm font-mono font-bold">{Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}</span>
-                    <span className="text-white/60 text-xs">/ 1:00</span>
+                    <span className="text-white/60 text-xs">/ 10:00</span>
                   </div>
                   <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-800">
-                    <div className="h-full bg-red-500 transition-all" style={{ width: `${(recordingTime / 60) * 100}%` }} />
+                    <div className="h-full bg-red-500 transition-all" style={{ width: `${(recordingTime / 600) * 100}%` }} />
                   </div>
                 </div>
                 <Button onClick={stopRecording} variant="destructive" className="w-full font-bold" data-testid="button-clip-stop-recording">
                   <Pause className="w-4 h-4 mr-2" />
-                  {t("social.stop_recording")} ({60 - recordingTime}s left)
+                  {t("social.stop_recording")} ({Math.floor((600 - recordingTime) / 60)}:{String((600 - recordingTime) % 60).padStart(2, '0')} left)
                 </Button>
               </div>
             ) : (
@@ -3190,7 +3727,7 @@ export default function ExplorePage() {
                       <div className="w-4 h-4 rounded-full bg-red-500" />
                     </div>
                     <span className="font-bold">{t("social.start_recording")}</span>
-                    <span className="text-xs text-zinc-500">Max 1 minute</span>
+                    <span className="text-xs text-zinc-500">Max 10 minutes</span>
                   </div>
                 </Button>
                 <div className="flex items-center gap-3">
@@ -3204,7 +3741,7 @@ export default function ExplorePage() {
                 >
                   <Upload className="w-5 h-5 mx-auto mb-1 text-zinc-500" />
                   <div className="text-sm text-zinc-500">Select a video file (MP4, WebM)</div>
-                  <div className="text-xs text-zinc-600 mt-1">Max 50MB, up to 1 minute</div>
+                  <div className="text-xs text-zinc-600 mt-1">Max 50MB, up to 10 minutes</div>
                 </div>
                 <input
                   type="file"
@@ -3714,6 +4251,29 @@ export default function ExplorePage() {
           </motion.div>
         )}
       </AnimatePresence>
+      {lightboxImage && (
+        <div 
+          className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+          data-testid="lightbox-overlay"
+        >
+          <button
+            className="absolute top-4 right-4 z-[101] bg-white/10 hover:bg-white/20 text-white rounded-full p-3 transition-colors"
+            onClick={() => setLightboxImage(null)}
+            data-testid="button-lightbox-close"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <img 
+            src={lightboxImage} 
+            alt="" 
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+            data-testid="img-lightbox-full"
+          />
+        </div>
+      )}
+      <audio ref={audioRef} onEnded={() => { setIsPlaying(false); setNowPlayingId(null); }} />
     </div>
   );
 }

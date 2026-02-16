@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X, Upload, Star, Image, Loader2 } from "lucide-react";
+import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X, Upload, Star, Image, Loader2, Smartphone, Monitor, Tablet } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,24 @@ export default function AdminStudio() {
 
   const { data: reviewQueue = [] } = useQuery<SocialTrack[]>({
     queryKey: ["/api/admin/review-queue"],
+    enabled: isAdmin,
+  });
+
+  type PwaInstallData = {
+    installations: Array<{
+      id: string;
+      userId: string;
+      platform: string;
+      userAgent: string | null;
+      installedAt: string;
+      userName: string;
+      userEmail: string | null;
+    }>;
+    total: number;
+  };
+
+  const { data: pwaData } = useQuery<PwaInstallData>({
+    queryKey: ["/api/admin/pwa-installs"],
     enabled: isAdmin,
   });
 
@@ -627,6 +645,62 @@ export default function AdminStudio() {
                 </Button>
               </div>
             </div>
+          </Card>
+
+          {/* PWA Installations Panel */}
+          <Card className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/80 backdrop-blur-md lg:col-span-3" data-testid="panel-pwa-installs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Smartphone className="h-5 w-5 text-primary" />
+                <div>
+                  <div className="font-display text-xl text-white" data-testid="text-pwa-title">App Installations</div>
+                  <div className="text-sm text-white/50">Users who added Afrokaviar to their home screen</div>
+                </div>
+              </div>
+              <div className="rounded-xl bg-primary/10 border border-primary/20 px-4 py-2" data-testid="text-pwa-total">
+                <span className="font-display text-2xl text-primary font-bold">{pwaData?.total ?? 0}</span>
+                <span className="text-xs text-primary/70 ml-1.5">total</span>
+              </div>
+            </div>
+
+            {pwaData && pwaData.installations.length > 0 ? (
+              <div className="mt-4 space-y-2">
+                <div className="grid grid-cols-4 gap-3 text-[10px] uppercase tracking-[0.18em] text-white/40 px-3 pb-1">
+                  <span>User</span>
+                  <span>Platform</span>
+                  <span>Date</span>
+                  <span>Email</span>
+                </div>
+                {pwaData.installations.map((install) => {
+                  const platformIcon = install.platform === "ios" || install.platform === "android" 
+                    ? <Smartphone className="w-3.5 h-3.5" /> 
+                    : install.platform === "macos" || install.platform === "windows" || install.platform === "linux"
+                    ? <Monitor className="w-3.5 h-3.5" />
+                    : <Tablet className="w-3.5 h-3.5" />;
+                  return (
+                    <div
+                      key={install.id}
+                      className="grid grid-cols-4 gap-3 items-center px-3 py-2.5 rounded-xl bg-black/20 border border-white/5"
+                      data-testid={`row-pwa-install-${install.id}`}
+                    >
+                      <span className="text-sm font-medium text-white truncate">{install.userName}</span>
+                      <span className="flex items-center gap-1.5 text-xs text-white/60 capitalize">
+                        {platformIcon}
+                        {install.platform}
+                      </span>
+                      <span className="text-xs text-white/50">
+                        {new Date(install.installedAt).toLocaleDateString()}
+                      </span>
+                      <span className="text-xs text-white/40 truncate">{install.userEmail || "—"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="mt-4 text-center py-6 text-white/30 text-sm">
+                No installations recorded yet. Users will see an install prompt 1 minute after logging in.
+              </div>
+            )}
           </Card>
         </motion.div>
       </div>
