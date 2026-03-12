@@ -57,11 +57,12 @@ import {
   savedItems,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql, lt, count } from "drizzle-orm";
+import { eq, and, desc, sql, lt, count, inArray } from "drizzle-orm";
 
 export interface IStorage {
   getSongs(limit?: number, offset?: number): Promise<Song[]>;
   getSongById(id: string): Promise<Song | undefined>;
+  getSongsByIds(ids: string[]): Promise<Song[]>;
   createSong(song: InsertSong): Promise<Song>;
   updateSong(id: string, song: Partial<InsertSong>): Promise<Song | undefined>;
   deleteSong(id: string): Promise<boolean>;
@@ -81,6 +82,7 @@ export interface IStorage {
   isRootAdmin(userId: string): Promise<boolean>;
   
   getUser(userId: string): Promise<User | undefined>;
+  getUsersByIds(ids: string[]): Promise<User[]>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByHandle(handle: string): Promise<User | undefined>;
   getUserByProviderId(authProvider: string, authProviderId: string): Promise<User | undefined>;
@@ -118,6 +120,7 @@ export interface IStorage {
   submitTrackForSale(trackId: string): Promise<SocialTrack | undefined>;
   deleteSocialTrack(id: string, userId: string): Promise<boolean>;
   deleteSocialTrackAsAdmin(id: string): Promise<boolean>;
+  clearPendingSubmissions(): Promise<number>;
   updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined>;
   
   // Invites
@@ -125,6 +128,7 @@ export interface IStorage {
   getInviteByCode(code: string): Promise<Invite | undefined>;
   getInvitesByUser(userId: string): Promise<Invite[]>;
   acceptInvite(code: string, userId: string): Promise<Invite | undefined>;
+  deleteInvite(id: string, userId: string): Promise<boolean>;
   
   // Featured content
   getFeaturedContent(position: string): Promise<FeaturedContent | undefined>;
@@ -182,6 +186,11 @@ export class DatabaseStorage implements IStorage {
   async getSongById(id: string): Promise<Song | undefined> {
     const [song] = await db.select().from(songs).where(eq(songs.id, id));
     return song;
+  }
+
+  async getSongsByIds(ids: string[]): Promise<Song[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(songs).where(inArray(songs.id, ids));
   }
 
   async createSong(song: InsertSong): Promise<Song> {
@@ -278,6 +287,12 @@ export class DatabaseStorage implements IStorage {
   async getUser(userId: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     return user;
+  }
+
+  async getUsersByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
+    const uniqueIds = Array.from(new Set(ids));
+    return db.select().from(users).where(inArray(users.id, uniqueIds));
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -481,7 +496,9 @@ export class DatabaseStorage implements IStorage {
 
   // Social tracks
   async getPendingSocialTracks(): Promise<SocialTrack[]> {
-    return db.select().from(socialTracks).where(eq(socialTracks.status, "pending")).orderBy(desc(socialTracks.createdAt));
+    return db.select().from(socialTracks).where(
+      inArray(socialTracks.status, ["pending", "pending_sale"])
+    ).orderBy(desc(socialTracks.createdAt));
   }
 
   async getSocialTracksByUser(userId: string): Promise<SocialTrack[]> {
@@ -551,6 +568,13 @@ export class DatabaseStorage implements IStorage {
     return result.rowCount ? result.rowCount > 0 : false;
   }
 
+  async clearPendingSubmissions(): Promise<number> {
+    const result = await db.delete(socialTracks).where(
+      inArray(socialTracks.status, ["pending", "pending_sale"])
+    );
+    return result.rowCount || 0;
+  }
+
   async updateUserProfileImage(userId: string, profileImageUrl: string): Promise<User | undefined> {
     const [updated] = await db
       .update(users)
@@ -582,6 +606,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(invites.inviteCode, code))
       .returning();
     return updated;
+  }
+
+  async deleteInvite(id: string, userId: string): Promise<boolean> {
+    const [invite] = await db.select().from(invites).where(eq(invites.id, id));
+    if (!invite || invite.invitedBy !== userId || invite.acceptedBy) return false;
+    await db.delete(invites).where(eq(invites.id, id));
+    return true;
   }
 
   // Featured content

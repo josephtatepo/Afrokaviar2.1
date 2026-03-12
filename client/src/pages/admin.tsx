@@ -137,6 +137,19 @@ export default function AdminStudio() {
     },
   });
 
+  const clearPendingMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/pending-submissions", { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to clear submissions");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/review-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/analytics"] });
+      toast({ title: "Submissions cleared", description: `${data.cleared} pending submissions removed.` });
+    },
+  });
+
   const openPromoteDialog = (track: SocialTrack) => {
     setPromoteTrack(track);
     setPromoteTitle(track.title);
@@ -375,9 +388,24 @@ export default function AdminStudio() {
                   Approve, reject, and feature submissions.
                 </div>
               </div>
-              <Badge className="border border-white/10 bg-white/5 text-white/70" data-testid="badge-queue-count">
-                {reviewQueue.length} items
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge className="border border-white/10 bg-white/5 text-white/70" data-testid="badge-queue-count">
+                  {reviewQueue.length} items
+                </Badge>
+                {reviewQueue.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-red-400/60 hover:text-red-400 hover:bg-red-400/10"
+                    onClick={() => clearPendingMutation.mutate()}
+                    disabled={clearPendingMutation.isPending}
+                    data-testid="button-clear-pending"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear all
+                  </Button>
+                )}
+              </div>
             </div>
 
             <div className="mt-4 grid gap-2" data-testid="list-queue">

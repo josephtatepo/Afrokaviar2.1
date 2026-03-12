@@ -115,6 +115,21 @@ export default function Profile() {
     },
   });
 
+  const deleteInviteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/invites/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to delete invite");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/me/invites"] });
+      toast({ title: "Invite deleted" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to delete invite", variant: "destructive" });
+    },
+  });
+
   const deleteAccountMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch("/api/account", {
@@ -502,21 +517,35 @@ export default function Profile() {
                       )}
                     </div>
                   </div>
-                  {!invite.acceptedAt && new Date(invite.expiresAt) > new Date() && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-white/50 hover:text-white"
-                      onClick={() => {
-                        const inviteLink = `${window.location.origin}/auth?invite=${invite.inviteCode}`;
-                        navigator.clipboard.writeText(inviteLink);
-                        toast({ title: "Copied!", description: "Invite link copied to clipboard" });
-                      }}
-                      data-testid={`button-copy-invite-${invite.id}`}
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {!invite.acceptedAt && new Date(invite.expiresAt) > new Date() && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-white/50 hover:text-white"
+                        onClick={() => {
+                          const inviteLink = `${window.location.origin}/auth?invite=${invite.inviteCode}`;
+                          navigator.clipboard.writeText(inviteLink);
+                          toast({ title: "Copied!", description: "Invite link copied to clipboard" });
+                        }}
+                        data-testid={`button-copy-invite-${invite.id}`}
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {!invite.acceptedAt && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-red-400/60 hover:text-red-400 hover:bg-red-400/10"
+                        onClick={() => deleteInviteMutation.mutate(invite.id)}
+                        disabled={deleteInviteMutation.isPending}
+                        data-testid={`button-delete-invite-${invite.id}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

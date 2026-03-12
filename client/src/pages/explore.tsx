@@ -176,6 +176,7 @@ type LibraryItem = {
   kind: "upload" | "purchase" | "free";
   contentType?: string;
   objectPath?: string;
+  audioUrl?: string;
   fileSize?: number;
 };
 
@@ -582,7 +583,7 @@ export default function ExplorePage() {
     },
   });
 
-  const { data: entitlementsData = [] } = useQuery<{ songId: string; song?: { id: string; title: string; artist: string } }[]>({
+  const { data: entitlementsData = [] } = useQuery<{ songId: string; song?: { id: string; title: string; artist: string; audioUrl?: string } }[]>({
     queryKey: ["/api/me/entitlements"],
     enabled: (tab === "music" || tab === "library") && isAuthenticated,
   });
@@ -729,7 +730,7 @@ export default function ExplorePage() {
 
   // Add free song to library mutation
   const addFreeSongMutation = useMutation({
-    mutationFn: async (song: { id: string; title: string; artist: string }) => {
+    mutationFn: async (song: { id: string; title: string; artist: string; audioUrl: string }) => {
       const res = await fetch("/api/me/library", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -737,7 +738,7 @@ export default function ExplorePage() {
         body: JSON.stringify({
           type: "free",
           referenceId: song.id,
-          metadata: { title: song.title, artist: song.artist },
+          metadata: { title: song.title, artist: song.artist, audioUrl: song.audioUrl },
         }),
       });
       if (!res.ok) {
@@ -1129,6 +1130,7 @@ export default function ExplorePage() {
         artist: ent.song!.artist,
         kind: "purchase" as const,
         contentType: "audio/mpeg",
+        audioUrl: ent.song!.audioUrl,
       }));
     
     const uploadedItems: LibraryItem[] = libraryUploadsData.map(item => ({
@@ -1141,16 +1143,20 @@ export default function ExplorePage() {
       fileSize: item.fileSize || undefined,
     }));
 
-    const freeItems: LibraryItem[] = libraryFreeData.map(item => ({
-      id: item.id,
-      title: (item.metadata as any)?.title || "Free Song",
-      artist: (item.metadata as any)?.artist || "Unknown",
-      kind: "free" as const,
-      contentType: "audio/mpeg",
-    }));
+    const freeItems: LibraryItem[] = libraryFreeData.map(item => {
+      const matchedSong = item.referenceId ? songs.find(s => s.id === item.referenceId) : undefined;
+      return {
+        id: item.id,
+        title: (item.metadata as any)?.title || "Free Song",
+        artist: (item.metadata as any)?.artist || "Unknown",
+        kind: "free" as const,
+        contentType: "audio/mpeg",
+        audioUrl: (item.metadata as any)?.audioUrl || matchedSong?.audioUrl,
+      };
+    });
     
     return [...purchasedItems, ...freeItems, ...uploadedItems];
-  }, [entitlementsData, libraryUploadsData, libraryFreeData]);
+  }, [entitlementsData, libraryUploadsData, libraryFreeData, songs]);
 
   const filteredLibrary = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -2325,7 +2331,7 @@ export default function ExplorePage() {
                                           toast({ title: "Please log in", description: "You need to be logged in to add songs to your library" });
                                           return;
                                         }
-                                        addFreeSongMutation.mutate({ id: s.id, title: s.title, artist: s.artist });
+                                        addFreeSongMutation.mutate({ id: s.id, title: s.title, artist: s.artist, audioUrl: s.audioUrl });
                                       }}
                                     >
                                       {addFreeSongMutation.isPending ? "..." : t("music.add_to_library")}
@@ -2709,6 +2715,7 @@ export default function ExplorePage() {
                                     setPostVideoFile(null);
                                     setPostLinkUrl("");
                                     refetchSocialPosts();
+                                    if (audioUrl) refetchSocialTracks();
                                     toast({ title: "Posted!", description: "Your post is now live." });
                                   } catch (err) {
                                     toast({ title: "Error", description: "Failed to create post. Please try again.", variant: "destructive" });
@@ -2927,7 +2934,7 @@ export default function ExplorePage() {
                                     <button 
                                       className={`flex items-center space-x-2 font-bold text-sm transition-colors ${liked ? 'text-red-500' : 'text-zinc-500 hover:text-white'}`}
                                       onClick={async () => {
-                                        recordTap("social", `post-${post.id}`, "post", post.text?.slice(0, 40) || "Post");
+                                        recordTap("social", `post-${post.id}`, "post", post.textContent?.slice(0, 40) || "Post");
                                         if (!isAuthenticated) {
                                           toast({ title: "Sign in required", description: "Please sign in to like posts.", variant: "destructive" });
                                           return;
@@ -2981,7 +2988,7 @@ export default function ExplorePage() {
                                   </div>
                                   <button
                                     className={`text-sm transition-colors ${savedItemsSet.has(`post:${post.id}`) ? 'text-[hsl(var(--primary))]' : 'text-zinc-500 hover:text-white'}`}
-                                    onClick={() => toggleSaveItem("post", post.id, post.text?.slice(0, 60) || "Post")}
+                                    onClick={() => toggleSaveItem("post", post.id, post.textContent?.slice(0, 60) || "Post")}
                                     data-testid={`button-post-bookmark-${post.id}`}
                                   >
                                     {savedItemsSet.has(`post:${post.id}`) ? <BookmarkCheck className="w-5 h-5 fill-current" /> : <Bookmark className="w-5 h-5" />}
@@ -3404,12 +3411,13 @@ export default function ExplorePage() {
                               data-testid={`row-library-${item.id}`}
                               onClick={() => {
                                 const cat = getFileCategory(item.contentType);
+                                const src = item.objectPath || item.audioUrl;
                                 if (cat === "audio" || !item.objectPath) {
                                   setNowPlaying(item.title);
                                   setNowPlayingId(item.id);
                                   setIsPlaying(true);
-                                  if (item.objectPath && audioRef.current) {
-                                    audioRef.current.src = item.objectPath;
+                                  if (src && audioRef.current) {
+                                    audioRef.current.src = src;
                                     audioRef.current.play().catch(() => {});
                                   }
                                 } else {
@@ -3430,8 +3438,9 @@ export default function ExplorePage() {
                                       setNowPlaying(item.title);
                                       setNowPlayingId(item.id);
                                       setIsPlaying(true);
-                                      if (audioRef.current && item.objectPath) {
-                                        audioRef.current.src = item.objectPath;
+                                      const src = item.objectPath || item.audioUrl;
+                                      if (audioRef.current && src) {
+                                        audioRef.current.src = src;
                                         audioRef.current.play().catch(() => {});
                                       }
                                     }

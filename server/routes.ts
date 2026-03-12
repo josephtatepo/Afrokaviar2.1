@@ -329,7 +329,7 @@ export async function registerRoutes(
           const song = await storage.getSongById(ent.songId);
           return {
             ...ent,
-            song: song ? { id: song.id, title: song.title, artist: song.artist, artworkUrl: song.artworkUrl } : null,
+            song: song ? { id: song.id, title: song.title, artist: song.artist, artworkUrl: song.artworkUrl, audioUrl: song.audioUrl } : null,
           };
         })
       );
@@ -363,7 +363,25 @@ export async function registerRoutes(
     try {
       const type = req.query.type as string | undefined;
       const items = await storage.getUserLibraryItems(req.user.id, type);
-      res.json(items);
+      
+      const freeIdsNeedingAudio = items
+        .filter((item: any) => item.type === "free" && item.referenceId && !(item.metadata as any)?.audioUrl)
+        .map((item: any) => item.referenceId as string);
+      
+      let songMap: Record<string, string> = {};
+      if (freeIdsNeedingAudio.length > 0) {
+        const matchedSongs = await storage.getSongsByIds(freeIdsNeedingAudio);
+        songMap = matchedSongs.reduce((acc, s) => { acc[s.id] = s.audioUrl; return acc; }, {} as Record<string, string>);
+      }
+      
+      const enriched = items.map((item: any) => {
+        if (item.type === "free" && item.referenceId && !(item.metadata as any)?.audioUrl && songMap[item.referenceId]) {
+          return { ...item, metadata: { ...(item.metadata || {}), audioUrl: songMap[item.referenceId] } };
+        }
+        return item;
+      });
+      
+      res.json(enriched);
     } catch (error) {
       console.error("Error fetching library items:", error);
       res.status(500).json({ message: "Failed to fetch library items" });
@@ -609,6 +627,17 @@ export async function registerRoutes(
     }
   });
 
+  // Admin: Clear all pending submissions
+  app.delete("/api/admin/pending-submissions", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const cleared = await storage.clearPendingSubmissions();
+      res.json({ success: true, cleared });
+    } catch (error) {
+      console.error("Error clearing pending submissions:", error);
+      res.status(500).json({ message: "Failed to clear pending submissions" });
+    }
+  });
+
   // Admin review queue
   app.get("/api/admin/review-queue", isAuthenticated, isAdmin, async (req, res) => {
     try {
@@ -654,16 +683,17 @@ export async function registerRoutes(
     try {
       const tracks = await storage.getApprovedSocialTracks();
       
-      // Enrich with user handles
-      const tracksWithHandles = await Promise.all(
-        tracks.map(async (track) => {
-          const user = await storage.getUser(track.uploadedBy);
-          return {
-            ...track,
-            uploaderHandle: user?.handle || user?.firstName || "user",
-          };
-        })
-      );
+      const userIds = Array.from(new Set(tracks.map(t => t.uploadedBy)));
+      const usersArr = await storage.getUsersByIds(userIds);
+      const userMap = new Map(usersArr.map(u => [u.id, u]));
+      
+      const tracksWithHandles = tracks.map(track => {
+        const user = userMap.get(track.uploadedBy);
+        return {
+          ...track,
+          uploaderHandle: user?.handle || user?.firstName || "user",
+        };
+      });
       
       res.json(tracksWithHandles);
     } catch (error) {
@@ -837,17 +867,19 @@ export async function registerRoutes(
       const offset = parseInt(req.query.offset as string) || 0;
       const posts = await storage.getSocialPosts(limit, offset);
 
-      const postsWithAuthors = await Promise.all(
-        posts.map(async (post) => {
-          const user = await storage.getUser(post.authorId);
-          return {
-            ...post,
-            authorHandle: user?.handle || user?.firstName || "user",
-            authorName: user?.firstName || user?.handle || "User",
-            authorImage: user?.profileImageUrl || null,
-          };
-        })
-      );
+      const authorIds = Array.from(new Set(posts.map(p => p.authorId)));
+      const authorsArr = await storage.getUsersByIds(authorIds);
+      const authorMap = new Map(authorsArr.map(u => [u.id, u]));
+
+      const postsWithAuthors = posts.map(post => {
+        const user = authorMap.get(post.authorId);
+        return {
+          ...post,
+          authorHandle: user?.handle || user?.firstName || "user",
+          authorName: user?.firstName || user?.handle || "User",
+          authorImage: user?.profileImageUrl || null,
+        };
+      });
 
       res.json(postsWithAuthors);
     } catch (error) {
@@ -884,6 +916,7 @@ export async function registerRoutes(
           await storage.createSocialTrack({
             title: audioTitle || "Untitled",
             audioUrl,
+            duration: audioDuration || null,
             uploadedBy: req.user.id,
             status: "approved",
           });
@@ -1144,6 +1177,20 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching invites:", error);
       res.status(500).json({ message: "Failed to fetch invites" });
+    }
+  });
+
+  // Delete invite (only if not accepted)
+  app.delete("/api/invites/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteInvite(req.params.id, req.user.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Invite not found, not yours, or already accepted" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting invite:", error);
+      res.status(500).json({ message: "Failed to delete invite" });
     }
   });
 
