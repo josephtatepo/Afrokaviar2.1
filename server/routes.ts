@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { initializeChannels, runHealthCheck, checkChannelHealth, startPeriodicHealthCheck } from "./channelHealthChecker";
 import { sendInviteEmail } from "./email";
 import { syncToGitHub } from "./githubSync";
+import { getDocumentaries, forceRefreshDocumentaries } from "./documentariesService";
 
 const ADMIN_ROOT_EMAIL = "josephtatepo@gmail.com";
 
@@ -33,6 +34,37 @@ export async function registerRoutes(
     }
     next();
   };
+
+  app.get("/api/documentaries", (_req, res) => {
+    try {
+      const { docs, updatedAt, source } = getDocumentaries();
+      res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=600");
+      res.json({ docs, updatedAt, source });
+    } catch (error) {
+      console.error("Error fetching documentaries:", error);
+      res.status(500).json({ message: "Failed to fetch documentaries" });
+    }
+  });
+
+  app.post("/api/documentaries/refresh", isAuthenticated, isAdmin, async (_req, res) => {
+    try {
+      const { docs, updatedAt, source, persisted } = await forceRefreshDocumentaries();
+      if (!persisted) {
+        return res.status(500).json({
+          message: "Refreshed in memory but failed to persist snapshot to disk",
+          docs,
+          updatedAt,
+          source,
+          count: docs.length,
+          persisted: false,
+        });
+      }
+      res.json({ docs, updatedAt, source, count: docs.length, persisted: true });
+    } catch (error) {
+      console.error("Error force-refreshing documentaries:", error);
+      res.status(502).json({ message: "Failed to refresh documentaries from source" });
+    }
+  });
 
   app.get("/api/songs", async (req, res) => {
     try {
@@ -452,6 +484,79 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating library item:", error);
       res.status(500).json({ message: "Failed to create library item" });
+    }
+  });
+
+  app.patch("/api/me/library/:id/move", isAuthenticated, async (req: any, res) => {
+    try {
+      const { folderId } = req.body;
+      const item = await storage.moveLibraryItem(req.params.id, req.user.id, folderId ?? null);
+      if (!item) return res.status(404).json({ message: "Item not found" });
+      res.json(item);
+    } catch (error) {
+      console.error("Error moving library item:", error);
+      res.status(500).json({ message: "Failed to move item" });
+    }
+  });
+
+  app.delete("/api/me/library/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteLibraryItem(req.params.id, req.user.id);
+      if (!deleted) return res.status(404).json({ message: "Item not found" });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting library item:", error);
+      res.status(500).json({ message: "Failed to delete item" });
+    }
+  });
+
+  app.get("/api/me/folders", isAuthenticated, async (req: any, res) => {
+    try {
+      const folders = await storage.getUserLibraryFolders(req.user.id);
+      res.json(folders);
+    } catch (error) {
+      console.error("Error fetching folders:", error);
+      res.status(500).json({ message: "Failed to fetch folders" });
+    }
+  });
+
+  app.post("/api/me/folders", isAuthenticated, async (req: any, res) => {
+    try {
+      const { name, parentId } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+      const folder = await storage.createLibraryFolder({
+        userId: req.user.id,
+        name: name.trim(),
+        parentId: parentId || null,
+      });
+      res.status(201).json(folder);
+    } catch (error) {
+      console.error("Error creating folder:", error);
+      res.status(500).json({ message: "Failed to create folder" });
+    }
+  });
+
+  app.patch("/api/me/folders/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const { name } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: "Name is required" });
+      const folder = await storage.updateLibraryFolder(req.params.id, req.user.id, name.trim());
+      if (!folder) return res.status(404).json({ message: "Folder not found" });
+      res.json(folder);
+    } catch (error) {
+      console.error("Error updating folder:", error);
+      res.status(500).json({ message: "Failed to update folder" });
+    }
+  });
+
+  app.delete("/api/me/folders/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const deleted = await storage.deleteLibraryFolder(req.params.id, req.user.id);
+      if (!deleted) return res.status(404).json({ message: "Folder not found" });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting folder:", error);
+      res.status(500).json({ message: "Failed to delete folder" });
     }
   });
 
@@ -1414,6 +1519,95 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("GitHub sync error:", error);
       res.status(500).json({ message: "GitHub sync failed: " + error.message });
+    }
+  });
+
+  // ── Features / Roadmap ─────────────────────────────────────
+  app.get("/api/features", async (req, res) => {
+    try {
+      const status = req.query.status as string | undefined;
+      const allFeatures = await storage.getFeatures(status);
+      res.json(allFeatures);
+    } catch (error) {
+      console.error("Error fetching features:", error);
+      res.status(500).json({ message: "Failed to fetch features" });
+    }
+  });
+
+  app.post("/api/features", isAuthenticated, async (req: any, res) => {
+    try {
+      const adminUser = await storage.getAdminUser(req.user.id);
+      if (!adminUser) return res.status(403).json({ message: "Admin only" });
+      const { name, description, status } = req.body;
+      if (!name?.trim() || !description?.trim()) return res.status(400).json({ message: "Name and description required" });
+      const feature = await storage.createFeature({ name: name.trim(), description: description.trim(), status: status || "requested" });
+      res.status(201).json(feature);
+    } catch (error) {
+      console.error("Error creating feature:", error);
+      res.status(500).json({ message: "Failed to create feature" });
+    }
+  });
+
+  app.patch("/api/features/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const adminUser = await storage.getAdminUser(req.user.id);
+      if (!adminUser) return res.status(403).json({ message: "Admin only" });
+      const { name, description, status } = req.body;
+      const updates: Record<string, string> = {};
+      if (name?.trim()) updates.name = name.trim();
+      if (description?.trim()) updates.description = description.trim();
+      if (status) updates.status = status;
+      const feature = await storage.updateFeature(req.params.id, updates);
+      if (!feature) return res.status(404).json({ message: "Feature not found" });
+      res.json(feature);
+    } catch (error) {
+      console.error("Error updating feature:", error);
+      res.status(500).json({ message: "Failed to update feature" });
+    }
+  });
+
+  app.delete("/api/features/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const adminUser = await storage.getAdminUser(req.user.id);
+      if (!adminUser) return res.status(403).json({ message: "Admin only" });
+      const deleted = await storage.deleteFeature(req.params.id);
+      if (!deleted) return res.status(404).json({ message: "Feature not found" });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting feature:", error);
+      res.status(500).json({ message: "Failed to delete feature" });
+    }
+  });
+
+  app.get("/api/features/:id/user-vote", isAuthenticated, async (req: any, res) => {
+    try {
+      const vote = await storage.getUserVote(req.user.id, req.params.id);
+      res.json(vote || null);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get vote" });
+    }
+  });
+
+  app.post("/api/features/:id/vote", isAuthenticated, async (req: any, res) => {
+    try {
+      const { voteType } = req.body;
+      if (voteType !== "upvote" && voteType !== "downvote") return res.status(400).json({ message: "Invalid voteType" });
+      await storage.castVote(req.user.id, req.params.id, voteType);
+      const feature = await storage.getFeatureById(req.params.id);
+      res.json(feature);
+    } catch (error) {
+      console.error("Error casting vote:", error);
+      res.status(500).json({ message: "Failed to cast vote" });
+    }
+  });
+
+  app.delete("/api/features/:id/vote", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.removeVote(req.user.id, req.params.id);
+      const feature = await storage.getFeatureById(req.params.id);
+      res.json(feature);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove vote" });
     }
   });
 

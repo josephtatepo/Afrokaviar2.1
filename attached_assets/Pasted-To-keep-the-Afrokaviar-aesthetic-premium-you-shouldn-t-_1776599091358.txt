@@ -1,0 +1,111 @@
+To keep the Afrokaviar aesthetic premium, you shouldn't just show a black box; you should show a "Dynamic Placeholder" that looks like a high-end book cover or a cinematic title card.
+
+Here is a refined "Developer-Ready" prompt you can use to generate the logic and design, followed by the actual Replit-ready code.
+
+📝 The Rewritten Prompt
+"Create a CSS/JS component for a 'Fallback Thumbnail' for the Afrokaviar Movies+ section. When a documentary image is missing, generate a cinematic placeholder that features: 1) A deep obsidian-to-gold gradient background with subtle noise texture. 2) The documentary title in elegant serif typography. 3) A short excerpt of the description from the metadata sheet overlaid with 60% opacity. 4) A subtle CSS pulse or 'shimmer' animation on a geometric African motif (like a diamond or sunburst) to indicate the video is ready to play. The output should be a single HTML/CSS/JS block compatible with Replit."
+
+🛠️ The Solution: "The Prestige Fallback" (Replit Code)
+This code detects if an image fails to load (or is missing) and replaces it with a beautiful, text-rich "Prestige Card" that displays the documentary's description.
+
+1. The Logic (JavaScript)
+Add this function to your script. It checks for an image and, if it fails, generates a "poster" using the title and description from your Excel data.
+
+JavaScript
+function handleMissingThumbnail(element, title, description) {
+    // If the image fails, replace the parent container's content
+    const container = element.parentElement;
+    container.innerHTML = `
+        <div class="fallback-card">
+            <div class="fallback-pattern"></div>
+            <div class="fallback-content">
+                <span class="category-tag">Archive Piece</span>
+                <h3 class="fallback-title">${title}</h3>
+                <div class="gold-line"></div>
+                <p class="fallback-description">${description.substring(0, 100)}...</p>
+                <div class="play-indicator">
+                    <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+            </div>
+        </div>
+    `;
+}
+2. The Design (CSS)
+Add this to your CSS file. This transforms the "black box" into a premium-looking title card.
+
+CSS
+/* The Fallback Card Container */
+.fallback-card {
+    width: 100%;
+    aspect-ratio: 2/3; /* Matching your poster look */
+    background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 20px;
+    border: 1px solid rgba(197, 160, 89, 0.3);
+    transition: 0.4s;
+}
+
+/* Subtle Animated Pattern Background */
+.fallback-pattern {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-image: radial-gradient(#C5A059 0.5px, transparent 0.5px);
+    background-size: 20px 20px;
+    opacity: 0.1;
+    animation: patternShift 20s linear infinite;
+}
+
+@keyframes patternShift {
+    from { background-position: 0 0; }
+    to { background-position: 40px 40px; }
+}
+
+.fallback-content { z-index: 2; }
+
+.fallback-title {
+    font-family: 'Playfair Display', serif;
+    color: #C5A059;
+    font-size: 1.4rem;
+    margin-bottom: 10px;
+}
+
+.gold-line {
+    width: 40px;
+    height: 2px;
+    background: #C5A059;
+    margin-bottom: 15px;
+}
+
+.fallback-description {
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.7);
+    line-height: 1.4;
+    font-family: 'Inter', sans-serif;
+}
+
+.play-indicator svg {
+    width: 40px;
+    fill: #C5A059;
+    filter: drop-shadow(0 0 10px rgba(197, 160, 89, 0.5));
+    margin-top: 15px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); opacity: 0.8; }
+}
+💡 How to apply this to your Gallery:
+In your HTML where you map through the Excel data, use the onerror attribute on your images:
+
+HTML
+<div class="film-card">
+    <img src="${doc.Thumbnail}" 
+         onerror="handleMissingThumbnail(this, '${doc.Title}', '${doc.Description}')" 
+         alt="${doc.Title}">
+</div>

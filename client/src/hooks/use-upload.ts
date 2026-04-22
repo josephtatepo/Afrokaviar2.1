@@ -51,6 +51,13 @@ interface UseUploadOptions {
  * }
  * ```
  */
+// Normalize MIME types: some browsers/OS report non-standard variants for common formats
+function normalizeContentType(type: string): string {
+  if (!type) return "application/octet-stream";
+  if (type === "audio/mp3" || type === "audio/x-mp3" || type === "audio/x-mpeg") return "audio/mpeg";
+  return type;
+}
+
 export function useUpload(options: UseUploadOptions = {}) {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -62,6 +69,7 @@ export function useUpload(options: UseUploadOptions = {}) {
    */
   const requestUploadUrl = useCallback(
     async (file: File): Promise<UploadResponse> => {
+      const contentType = normalizeContentType(file.type);
       const response = await fetch("/api/uploads/request-url", {
         method: "POST",
         headers: {
@@ -70,7 +78,7 @@ export function useUpload(options: UseUploadOptions = {}) {
         body: JSON.stringify({
           name: file.name,
           size: file.size,
-          contentType: file.type || "application/octet-stream",
+          contentType,
         }),
       });
 
@@ -93,7 +101,7 @@ export function useUpload(options: UseUploadOptions = {}) {
         method: "PUT",
         body: file,
         headers: {
-          "Content-Type": file.type || "application/octet-stream",
+          "Content-Type": normalizeContentType(file.type),
         },
       });
 
@@ -170,7 +178,7 @@ export function useUpload(options: UseUploadOptions = {}) {
         body: JSON.stringify({
           name: file.name,
           size: file.size,
-          contentType: file.type || "application/octet-stream",
+          contentType: normalizeContentType(file.type),
         }),
       });
 
@@ -182,7 +190,7 @@ export function useUpload(options: UseUploadOptions = {}) {
       return {
         method: "PUT",
         url: data.uploadURL,
-        headers: { "Content-Type": file.type || "application/octet-stream" },
+        headers: { "Content-Type": normalizeContentType(file.type) },
       };
     },
     []

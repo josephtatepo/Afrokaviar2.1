@@ -113,7 +113,7 @@
   --chart-5: 330 60% 52%;
 
   --font-sans: 'Space Grotesk', 'Inter', system-ui, sans-serif;
-  --font-serif: 'Playfair Display', Georgia, serif;
+  --font-serif: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --radius: .5rem;
   --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.04);
@@ -367,6 +367,13 @@
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
+  body, body * {
+    font-family: var(--font-sans) !important;
+  }
+  body code, body kbd, body pre, body samp,
+  body .font-mono, body [class*="font-mono"] {
+    font-family: var(--font-mono) !important;
+  }
 
   .font-display {
     font-family: var(--font-sans);
@@ -583,6 +590,52 @@
   .placeholder\:text-white\/35::placeholder {
     color: hsl(var(--muted-foreground)) !important;
   }
+  .text-zinc-100,
+  .text-zinc-50,
+  .text-gray-100,
+  .text-gray-50,
+  .text-slate-100,
+  .text-slate-50,
+  .text-neutral-100,
+  .text-neutral-50,
+  .text-stone-100,
+  .text-stone-50 {
+    color: hsl(var(--foreground)) !important;
+  }
+  .text-gray-200,
+  .text-gray-300,
+  .text-slate-200,
+  .text-slate-300,
+  .text-neutral-200,
+  .text-neutral-300,
+  .text-stone-200,
+  .text-stone-300 {
+    color: hsl(var(--foreground)) !important;
+  }
+  .text-gray-400,
+  .text-gray-500,
+  .text-gray-600,
+  .text-slate-400,
+  .text-slate-500,
+  .text-slate-600,
+  .text-neutral-400,
+  .text-neutral-500,
+  .text-neutral-600,
+  .text-stone-400,
+  .text-stone-500,
+  .text-stone-600 {
+    color: hsl(var(--muted-foreground)) !important;
+  }
+  .hover\:text-white:hover,
+  .hover\:text-zinc-100:hover,
+  .hover\:text-zinc-200:hover,
+  .hover\:text-zinc-300:hover {
+    color: hsl(var(--foreground)) !important;
+  }
+  .group:hover .group-hover\:text-zinc-300,
+  .group:hover .group-hover\:text-white {
+    color: hsl(var(--foreground)) !important;
+  }
 }
 
 @keyframes comment-wiggle {
@@ -596,4 +649,37 @@
 
 .comment-wiggle-active {
   animation: comment-wiggle 3s ease-in-out 1;
+}
+
+@keyframes patternShift {
+  from { background-position: 0 0; }
+  to { background-position: 40px 40px; }
+}
+
+@keyframes goldPulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+.fallback-pattern {
+  background-image: radial-gradient(#F4BE44 0.6px, transparent 0.6px);
+  background-size: 20px 20px;
+  opacity: 0.12;
+  animation: patternShift 24s linear infinite;
+}
+
+.fallback-play-pulse {
+  animation: goldPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes heartbeatPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 30px rgba(244,190,68,0.45); }
+  15% { transform: scale(1.12); box-shadow: 0 0 55px rgba(244,190,68,0.75); }
+  30% { transform: scale(1); box-shadow: 0 0 30px rgba(244,190,68,0.45); }
+  45% { transform: scale(1.08); box-shadow: 0 0 45px rgba(244,190,68,0.6); }
+  60% { transform: scale(1); box-shadow: 0 0 30px rgba(244,190,68,0.45); }
+}
+
+.heartbeat-pulse {
+  animation: heartbeatPulse 1.6s ease-in-out infinite;
 }

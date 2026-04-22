@@ -66,6 +66,31 @@ Preferred communication style: Simple, everyday language.
 - **Content Viewers**: Inline image viewer, video player, PDF reader, audio player in library
 - **File Category Tracking**: contentType stored in library item metadata for proper icon/viewer selection
 
+### Movies+ Tab (inside `/explore`)
+- **Purpose**: Default landing tab in Explore — a "Private Screening Room" for cinema and documentaries; first entry in sidebar + mobile bottom nav (gold "+" branding)
+- **Default Tab**: Explore opens on Movies+ (was previously `radio-tv`)
+- **Standalone redirect**: `/movies` route still exists but immediately redirects to `/explore` (preserves backlinks/PWA shortcuts)
+- **Search**: Reuses Explore's global search input — filters Movies+ by title, speaker, category, and description in real time
+- **Component**: `MoviesContent` exported from `client/src/pages/movies.tsx`, takes optional `searchQuery` prop; rendered inside Explore's `<TabsContent value="movies">`
+- **Data**: Pulls from same Google Sheet CSV as landing-page docs; `Type` column groups items into "Documentaries" and "Features" sections (defaults to Documentary)
+- **Hero**: Picks "I Am Not Your Negro" if present, else first Feature, else first Documentary; hidden when a search query is active; uses YouTube `sddefault.jpg` with graceful gradient fallback when YouTube returns its no-thumbnail placeholder (detected by `naturalHeight < 120`)
+- **Grid**: 2:3 portrait poster cards with gold hover glow + scale, category ribbon, click opens shared `CinemaModal`
+- **Continuity**: `CinemaModal` is rendered via portal so the Explore page stays in background — user feels they never leave the theater
+- **Shared module**: `client/src/lib/documentaries.tsx` exports `Documentary`, `CinemaModal`, `fetchDocs`, `FALLBACK_DOCS`, `READING_BY_POSITION`, `youtubeThumb` — used by home.tsx and movies.tsx
+
+### Logo Sizing Reference (verified)
+Native PNG: `/logo-dark.png` and `/logo-light.png` are 1096×155 (~7.07:1 aspect).
+
+| Viewport | Page | Location | Tailwind class | Rendered (CSS px) |
+|---|---|---|---|---|
+| Mobile (≤md) | `/` | header | `h-5 w-auto` | ~86 × 20 |
+| Mobile (≤md) | `/explore` | mobile header (`img-explore-logo-mobile`) | `h-5 w-auto` | ~89 × 20 |
+| Desktop (md+) | `/explore` | sidebar (`img-explore-logo`) | `h-5 w-auto` | ~141 × 20 |
+| Desktop (md+) | `/` | header | `h-5 w-auto` | ~141 × 20 |
+| Mobile bottom nav | `/explore` | bottom nav | `h-4 w-auto` | ~113 × 16 |
+
+All sizes preserve the native aspect ratio (within 5%), so the logo never appears squeezed.
+
 ### PWA / App Install System
 - **Manifest**: `client/public/manifest.json` with app icons and standalone display mode
 - **Service Worker**: `client/public/sw.js` minimal passthrough for PWA eligibility

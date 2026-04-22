@@ -4,18 +4,27 @@ import { isAuthenticated } from "../../auth/socialAuth";
 import { storage } from "../../storage";
 
 const ALLOWED_CONTENT_TYPES = [
-  "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac",
+  "audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav", "audio/flac",
   "image/jpeg", "image/png", "image/webp",
   "video/mp4", "video/webm",
   "application/pdf",
 ];
+
+// Normalize content types: some OS/browsers send non-standard variants
+function normalizeContentType(ct: string): string {
+  if (ct === "audio/mp3") return "audio/mpeg";
+  if (ct === "audio/x-mp3") return "audio/mpeg";
+  if (ct === "audio/x-mpeg") return "audio/mpeg";
+  return ct;
+}
 
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
 
   app.post("/api/uploads/request-url", isAuthenticated, async (req: any, res) => {
     try {
-      const { name, size, contentType } = req.body;
+      const { name, size } = req.body;
+      const contentType = req.body.contentType ? normalizeContentType(req.body.contentType) : undefined;
 
       if (!name) {
         return res.status(400).json({ error: "Missing required field: name" });
@@ -60,17 +69,15 @@ export function registerObjectStorageRoutes(app: Express): void {
   });
 
   /**
-   * Serve uploaded objects.
+   * Serve uploaded objects with HTTP range request support.
+   * Range requests are required by Safari/iOS for audio/video playback.
    *
    * GET /objects/:path+
-   *
-   * This serves files from object storage. For public files, no auth needed.
-   * For protected files, add authentication middleware and ACL checks.
    */
   app.get(/^\/objects\/(.+)$/, async (req, res) => {
     try {
       const objectFile = await objectStorageService.getObjectEntityFile(req.path);
-      await objectStorageService.downloadObject(objectFile, res);
+      await objectStorageService.downloadObject(objectFile, res, req);
     } catch (error) {
       console.error("Error serving object:", error);
       if (error instanceof ObjectNotFoundError) {
@@ -80,4 +87,3 @@ export function registerObjectStorageRoutes(app: Express): void {
     }
   });
 }
-

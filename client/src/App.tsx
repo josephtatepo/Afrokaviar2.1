@@ -15,6 +15,9 @@ import Profile from "@/pages/profile";
 import PrivacyPolicy from "@/pages/privacy-policy";
 import Terms from "@/pages/terms";
 import Blueprint from "@/pages/blueprint";
+import FeaturesPage from "@/pages/features";
+import MoviesPage from "@/pages/movies";
+import Archive from "@/pages/archive";
 import { PwaInstallPrompt } from "@/components/pwa-install-prompt";
 
 function Router() {
@@ -22,6 +25,9 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/explore" component={Explore} />
+      <Route path="/features" component={FeaturesPage} />
+      <Route path="/movies" component={MoviesPage} />
+      <Route path="/archive" component={Archive} />
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminStudio} />
       <Route path="/profile" component={Profile} />

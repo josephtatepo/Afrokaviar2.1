@@ -153,6 +153,13 @@ const translations: Record<string, Record<Lang, string>> = {
   "footer.social": { en: "Sell Your Songs for $1, Request them to be added to the Music section.", fr: "Vendez vos morceaux à 1$, demandez leur ajout à la section Musique." },
   "footer.music": { en: "All Songs are $1 and stored in My Library.", fr: "Tous les morceaux sont à 1$ et stockés dans Ma Bibliothèque." },
   "footer.library": { en: "My Library 50GB storage — $5/mo or $50/yr.", fr: "Ma Bibliothèque 50 Go de stockage — 5$/mois ou 50$/an." },
+
+  "docs.eyebrow": { en: "The Intellectual Archive", fr: "Les Archives Intellectuelles" },
+  "docs.heading": { en: "Documentaries", fr: "Documentaires" },
+  "docs.subheading": { en: "Three foundational films on the African and diasporic mind. Curated, contextualised, archived.", fr: "Trois films fondateurs sur la pensée africaine et diasporique. Sélectionnés, contextualisés, archivés." },
+  "docs.watch": { en: "Watch Preview", fr: "Voir l'aperçu" },
+  "docs.close": { en: "Close Archive", fr: "Fermer l'archive" },
+  "docs.related": { en: "Related Reading", fr: "Lecture associée" },
 };
 
 type I18nContextType = {

@@ -4,6 +4,21 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { users } from "./auth";
 
+export const libraryFolders = pgTable("library_folders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  parentId: varchar("parent_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("library_folders_user_idx").on(table.userId),
+]);
+
+export const insertLibraryFolderSchema = createInsertSchema(libraryFolders).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const libraryItems = pgTable("library_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -12,10 +27,12 @@ export const libraryItems = pgTable("library_items", {
   objectPath: text("object_path"),
   fileSize: bigint("file_size", { mode: "number" }),
   metadata: jsonb("metadata"),
+  folderId: varchar("folder_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("library_items_user_idx").on(table.userId),
   index("library_items_user_type_idx").on(table.userId, table.type),
+  index("library_items_folder_idx").on(table.folderId),
 ]);
 
 export const insertLibraryItemSchema = createInsertSchema(libraryItems).omit({
@@ -55,6 +72,8 @@ export const insertUserStorageSchema = createInsertSchema(userStorage).omit({
   updatedAt: true,
 });
 
+export type LibraryFolder = typeof libraryFolders.$inferSelect;
+export type InsertLibraryFolder = z.infer<typeof insertLibraryFolderSchema>;
 export type LibraryItem = typeof libraryItems.$inferSelect;
 export type InsertLibraryItem = z.infer<typeof insertLibraryItemSchema>;
 export type PlaybackProgress = typeof playbackProgress.$inferSelect;

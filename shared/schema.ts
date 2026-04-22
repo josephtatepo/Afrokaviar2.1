@@ -6,3 +6,4 @@ export * from "./models/admin";
 export * from "./models/orders";
 export * from "./models/channels";
 export * from "./models/saved";
+export * from "./models/features";

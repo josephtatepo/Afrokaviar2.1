@@ -26,6 +26,9 @@ import {
   type InsertClip,
   type LibraryItem,
   type InsertLibraryItem,
+  type LibraryFolder,
+  type InsertLibraryFolder,
+  libraryFolders,
   songs,
   songReactions,
   songFavorites,
@@ -55,6 +58,11 @@ import {
   type SavedItem,
   type InsertSavedItem,
   savedItems,
+  type Feature,
+  type InsertFeature,
+  type FeatureVote,
+  features,
+  featureVotes,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, lt, count, inArray } from "drizzle-orm";
@@ -161,6 +169,14 @@ export interface IStorage {
   createLibraryItem(item: InsertLibraryItem): Promise<LibraryItem>;
   getUserLibraryItems(userId: string, type?: string): Promise<LibraryItem[]>;
   getUserStorageStats(userId: string): Promise<{ usedBytes: number; limitBytes: number; isAdmin: boolean }>;
+  moveLibraryItem(itemId: string, userId: string, folderId: string | null): Promise<LibraryItem | undefined>;
+  deleteLibraryItem(itemId: string, userId: string): Promise<boolean>;
+
+  // Library folders
+  createLibraryFolder(folder: InsertLibraryFolder): Promise<LibraryFolder>;
+  getUserLibraryFolders(userId: string): Promise<LibraryFolder[]>;
+  updateLibraryFolder(id: string, userId: string, name: string): Promise<LibraryFolder | undefined>;
+  deleteLibraryFolder(id: string, userId: string): Promise<boolean>;
 
   // PWA installations
   createPwaInstallation(install: InsertPwaInstallation): Promise<PwaInstallation>;
@@ -173,6 +189,16 @@ export interface IStorage {
   saveItem(item: InsertSavedItem): Promise<SavedItem>;
   unsaveItem(userId: string, contentType: string, contentId: string): Promise<boolean>;
   isSaved(userId: string, contentType: string, contentId: string): Promise<boolean>;
+
+  // Features / Roadmap
+  getFeatures(status?: string): Promise<Feature[]>;
+  getFeatureById(id: string): Promise<Feature | undefined>;
+  createFeature(feature: InsertFeature): Promise<Feature>;
+  updateFeature(id: string, updates: Partial<InsertFeature>): Promise<Feature | undefined>;
+  deleteFeature(id: string): Promise<boolean>;
+  getUserVote(userId: string, featureId: string): Promise<FeatureVote | undefined>;
+  castVote(userId: string, featureId: string, voteType: "upvote" | "downvote"): Promise<void>;
+  removeVote(userId: string, featureId: string): Promise<void>;
 
   // Account deletion
   deleteUserAccount(userId: string): Promise<{ deletedFiles: string[] }>;
@@ -659,6 +685,52 @@ export class DatabaseStorage implements IStorage {
     return { usedBytes, limitBytes: isAdminUser ? Number.MAX_SAFE_INTEGER : FREE_LIMIT, isAdmin: isAdminUser };
   }
 
+  async moveLibraryItem(itemId: string, userId: string, folderId: string | null): Promise<LibraryItem | undefined> {
+    const [updated] = await db
+      .update(libraryItems)
+      .set({ folderId })
+      .where(and(eq(libraryItems.id, itemId), eq(libraryItems.userId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async deleteLibraryItem(itemId: string, userId: string): Promise<boolean> {
+    const result = await db
+      .delete(libraryItems)
+      .where(and(eq(libraryItems.id, itemId), eq(libraryItems.userId, userId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async createLibraryFolder(folder: InsertLibraryFolder): Promise<LibraryFolder> {
+    const [created] = await db.insert(libraryFolders).values(folder).returning();
+    return created;
+  }
+
+  async getUserLibraryFolders(userId: string): Promise<LibraryFolder[]> {
+    return db.select().from(libraryFolders)
+      .where(eq(libraryFolders.userId, userId))
+      .orderBy(libraryFolders.name);
+  }
+
+  async updateLibraryFolder(id: string, userId: string, name: string): Promise<LibraryFolder | undefined> {
+    const [updated] = await db
+      .update(libraryFolders)
+      .set({ name })
+      .where(and(eq(libraryFolders.id, id), eq(libraryFolders.userId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async deleteLibraryFolder(id: string, userId: string): Promise<boolean> {
+    // Move items in this folder back to root before deleting
+    await db.update(libraryItems)
+      .set({ folderId: null })
+      .where(and(eq(libraryItems.folderId, id), eq(libraryItems.userId, userId)));
+    const result = await db.delete(libraryFolders)
+      .where(and(eq(libraryFolders.id, id), eq(libraryFolders.userId, userId)));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
   async createSocialPost(post: InsertSocialPost): Promise<SocialPost> {
     const [created] = await db.insert(socialPosts).values(post).returning();
     return created;
@@ -823,6 +895,71 @@ export class DatabaseStorage implements IStorage {
     const result = await db.select().from(savedItems)
       .where(and(eq(savedItems.userId, userId), eq(savedItems.contentType, contentType), eq(savedItems.contentId, contentId)));
     return result.length > 0;
+  }
+
+  async getFeatures(status?: string): Promise<Feature[]> {
+    if (status) {
+      return db.select().from(features).where(eq(features.status, status)).orderBy(desc(features.createdAt));
+    }
+    return db.select().from(features).orderBy(desc(features.createdAt));
+  }
+
+  async getFeatureById(id: string): Promise<Feature | undefined> {
+    const [feature] = await db.select().from(features).where(eq(features.id, id));
+    return feature;
+  }
+
+  async createFeature(feature: InsertFeature): Promise<Feature> {
+    const [created] = await db.insert(features).values(feature).returning();
+    return created;
+  }
+
+  async updateFeature(id: string, updates: Partial<InsertFeature>): Promise<Feature | undefined> {
+    const [updated] = await db.update(features).set(updates).where(eq(features.id, id)).returning();
+    return updated;
+  }
+
+  async deleteFeature(id: string): Promise<boolean> {
+    const result = await db.delete(features).where(eq(features.id, id));
+    return result.rowCount ? result.rowCount > 0 : false;
+  }
+
+  async getUserVote(userId: string, featureId: string): Promise<FeatureVote | undefined> {
+    const [vote] = await db.select().from(featureVotes)
+      .where(and(eq(featureVotes.userId, userId), eq(featureVotes.featureId, featureId)));
+    return vote;
+  }
+
+  async castVote(userId: string, featureId: string, voteType: "upvote" | "downvote"): Promise<void> {
+    const existing = await this.getUserVote(userId, featureId);
+    if (existing) {
+      if (existing.voteType === voteType) return; // no change
+      // Switch vote: decrement old, increment new
+      if (existing.voteType === "upvote") {
+        await db.update(features).set({ upvotes: sql`${features.upvotes} - 1`, downvotes: sql`${features.downvotes} + 1` }).where(eq(features.id, featureId));
+      } else {
+        await db.update(features).set({ downvotes: sql`${features.downvotes} - 1`, upvotes: sql`${features.upvotes} + 1` }).where(eq(features.id, featureId));
+      }
+      await db.update(featureVotes).set({ voteType }).where(and(eq(featureVotes.userId, userId), eq(featureVotes.featureId, featureId)));
+    } else {
+      await db.insert(featureVotes).values({ userId, featureId, voteType });
+      if (voteType === "upvote") {
+        await db.update(features).set({ upvotes: sql`${features.upvotes} + 1` }).where(eq(features.id, featureId));
+      } else {
+        await db.update(features).set({ downvotes: sql`${features.downvotes} + 1` }).where(eq(features.id, featureId));
+      }
+    }
+  }
+
+  async removeVote(userId: string, featureId: string): Promise<void> {
+    const existing = await this.getUserVote(userId, featureId);
+    if (!existing) return;
+    await db.delete(featureVotes).where(and(eq(featureVotes.userId, userId), eq(featureVotes.featureId, featureId)));
+    if (existing.voteType === "upvote") {
+      await db.update(features).set({ upvotes: sql`${features.upvotes} - 1` }).where(eq(features.id, featureId));
+    } else {
+      await db.update(features).set({ downvotes: sql`${features.downvotes} - 1` }).where(eq(features.id, featureId));
+    }
   }
 
   async deleteUserAccount(userId: string): Promise<{ deletedFiles: string[] }> {

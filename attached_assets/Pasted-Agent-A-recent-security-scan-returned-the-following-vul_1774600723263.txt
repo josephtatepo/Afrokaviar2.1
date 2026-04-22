@@ -1,0 +1,88 @@
+Agent
+A recent security scan returned the following vulnerability alert using static code analysis:
+
+A gitleaks Hashicorp Tf Password detected. Avoid hardcoding credentials directly in connection strings as this creates security risks. Instead, use environment variables to store and access credentials at runtime. If you need the actual credential values to make this work properly, ask me to provide them through Replit's secret system.
+Location: server/auth.ts (lines 117-117)
+
+Instructions:
+
+Examine the code at the specified location to understand the vulnerability context
+Decide whether the reported issue is real. Use execution path, context, and impact to judge.
+If you have high confidence that it's exploitable, provide the smallest safe patch. Tell the user it is important to test their app before continuing with their deployment.
+If the issue is a false positive but violates coding best practices, apply the minimal fix to follow recommended patterns. Otherwise, if there's no security risk and the code follows best practices, make no change and explain why.
+change the subdomain from https://convoverse.replit.app to youvian.replit.app
+
+Changing a Replit app's subdomain is done through Replit's project settings, not through code. Here's how you can do it:
+
+Open your Repl's settings (click the three dots menu or go to the "Settings" tab in your Repl).
+Under the Deployment section, look for the option to change your custom subdomain.
+Change it from convoverse to youvian.
+This is a platform-level setting that I can't modify through code changes. You'll need to make this change directly in the Replit dashboard. Once updated, your app will be available at https://youvian.replit.app.
+
+THe dashboard welcome message should pull my profile name if available
+
+Time worked
+1 minute
+Work done
+21 actions
+Items read
+176 lines
+Code changed
++1
+-1
+Agent Usage
+$0.59
+Is everything deployed?
+
+The latest code change (preferring profile name in the welcome message) hasn't been deployed yet — it's only live in your development environment. Would you like me to publish it now?
+
+You can go ahead and publish when ready to push the profile name welcome message change live.
+
+I want to make a features page like the one for Youvian for Afrokaviar.com but keep Afrokaviar branding. What code can you suggest for the Replit Agent?
+
+Does this include the automatic moving of cards when their status is confirmed (coming soon) deployed (available) in the admin section where I should be able to create new cards?
+
+Good question! The prompt I shared covers the front-end layout but doesn't include the full backend system that Youvian uses. Let me check how that works here so I can give you a complete picture.
+
+You're right — the prompt I gave you didn't cover that. Youvian actually has a full system behind the features page:
+
+How it works in Youvian:
+
+Database — There's a features table that stores each feature with a name, description, and status field. The status can be "requested", "confirmed", or "deployed".
+
+Admin panel — You (as admin) can create new feature cards, and change their status using a dropdown. When you change a status:
+
+"requested" → appears in the "Vote on Features" section (users can upvote/downvote)
+"confirmed" → automatically moves to the "Coming Soon" section
+"deployed" → automatically moves to the "Available Now" section
+Voting system — There's also a feature_votes table so logged-in users can vote on requested features, and vote counts are tracked.
+
+So the cards move between sections automatically based on the status you set in the admin panel. Here's an updated, more complete prompt for Afrokaviar:
+
+Build a full Feature Roadmap system with admin management:
+
+Database:
+
+Create a features table with columns: id (auto-increment primary key), name (text), description (text), status (varchar — one of "requested", "confirmed", "deployed"), upvotes (integer, default 0), downvotes (integer, default 0), created_at (timestamp).
+Create a feature_votes table with: id, userId, featureId (foreign key to features, cascade on delete), voteType ("upvote" or "downvote"). Index on userId and featureId.
+API routes:
+
+GET /api/features — list all features, optionally filter by status
+POST /api/features — create a new feature (admin only)
+PATCH /api/features/:id — update feature name, description, or status (admin only)
+DELETE /api/features/:id — delete a feature (admin only)
+POST /api/features/:id/vote — logged-in users can upvote or downvote
+GET /api/features/:id/user-vote — get the current user's vote on a feature
+Features page (public):
+
+Three sections that features automatically flow between based on their status:
+"Available Now" — shows features with status "deployed" in a responsive grid (1-3 columns)
+"Coming Soon" — shows features with status "confirmed", each with a "Soon" badge
+"Vote on Features" — shows features with status "requested", expandable cards with upvote/downvote buttons for logged-in users
+Cards have a glassmorphism style (semi-transparent backgrounds with backdrop blur), hover elevation, and dark mode support
+Admin panel (feature management section):
+
+Form to create new features with name and description fields
+List of all features with a status dropdown (requested / confirmed / deployed)
+Changing the status dropdown automatically moves the card to the correct section on the public features page
+Use Afrokaviar's brand colors and design system throughout.

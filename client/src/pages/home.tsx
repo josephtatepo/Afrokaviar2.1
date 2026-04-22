@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { useI18n } from "@/lib/i18n";
 import {
   MonitorPlay,
   Radio,
@@ -17,7 +18,15 @@ import {
   Users,
   Crown,
   Lock,
+  Film,
 } from "lucide-react";
+import {
+  CinemaModal,
+  FALLBACK_DOCS,
+  fetchDocs,
+  READING_BY_POSITION,
+  type Documentary,
+} from "@/lib/documentaries";
 
 type FeaturedSong = {
   id: string;
@@ -30,7 +39,22 @@ type FeaturedSong = {
 };
 
 export default function Home() {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState("live");
+  const [openDoc, setOpenDoc] = useState<Documentary | null>(null);
+
+  const { data: docsData } = useQuery<Documentary[]>({
+    queryKey: ["documentaries-csv"],
+    queryFn: fetchDocs,
+    retry: 1,
+    staleTime: 1000 * 30,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+  const docs = ((docsData && docsData.length >= 3) ? docsData : FALLBACK_DOCS)
+    .slice(0, 3)
+    .map((d, i) => ({ ...d, reading: d.reading ?? READING_BY_POSITION[i] }));
+
   const [isScrolled, setIsScrolled] = useState(false);
   const [isGeneratingAura, setIsGeneratingAura] = useState(false);
   const [auraDescription, setAuraDescription] = useState("");
@@ -97,8 +121,9 @@ export default function Home() {
       {/* HEADER */}
       <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${isScrolled ? "py-4 bg-black/80 backdrop-blur-2xl border-b border-white/5" : "py-8"}`}>
         <div className="max-w-[1440px] mx-auto px-6 md:px-10 flex items-center justify-between">
-          <Link href="/" className="flex items-center space-x-2" data-testid="link-brand">
-            <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }}>AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR</span>
+          <Link href="/" className="flex items-center space-x-2 shrink-0" data-testid="link-brand">
+            <img src="/logo-dark.png" alt="Afrokaviar" className="h-[17px] md:h-5 w-auto max-w-none dark:block hidden" />
+            <img src="/logo-light.png" alt="Afrokaviar" className="h-[17px] md:h-5 w-auto max-w-none dark:hidden block" />
           </Link>
           <div className="flex items-center space-x-4">
             <Link href="/explore" data-testid="link-enter">
@@ -370,30 +395,118 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        {/* DOCUMENTARIES — THE INTELLECTUAL ARCHIVE */}
+        <section id="documentaries" className="mt-32" data-testid="section-documentaries">
+          <div className="text-center mb-14">
+            <div className="inline-flex items-center gap-2 mb-4">
+              <span className="h-px w-8" style={{ backgroundColor: "#F4BE44" }} />
+              <span className="text-[10px] font-bold uppercase tracking-[0.4em]" style={{ color: "#F4BE44" }} data-testid="text-docs-eyebrow">
+                {t("docs.eyebrow")}
+              </span>
+              <span className="h-px w-8" style={{ backgroundColor: "#F4BE44" }} />
+            </div>
+            <h2 className="text-4xl md:text-6xl font-black tracking-tighter mb-4" data-testid="text-docs-heading">
+              {t("docs.heading")}
+            </h2>
+            <p className="text-zinc-500 max-w-xl mx-auto text-sm md:text-base leading-relaxed">
+              {t("docs.subheading")}
+            </p>
+          </div>
+
+          <div className="max-w-[900px] mx-auto border-l" style={{ borderColor: "rgba(244,190,68,0.3)" }}>
+            {docs.map((doc, idx) => (
+              <div
+                key={doc.id}
+                className="group relative px-8 md:px-14 py-12 border-b border-white/5 hover:bg-[rgba(244,190,68,0.04)] transition-colors duration-500"
+                data-testid={`card-doc-${doc.id}`}
+              >
+                <span
+                  className="absolute left-4 md:left-6 top-10 text-6xl md:text-7xl font-black tracking-tighter opacity-10 select-none pointer-events-none"
+                  style={{ color: "#F4BE44" }}
+                >
+                  {String(idx + 1).padStart(2, "0")}
+                </span>
+
+                <div className="relative z-10 ml-16 md:ml-20">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.3em]" style={{ color: "#F4BE44" }}>
+                      {doc.category}
+                    </span>
+                    <span className="text-zinc-700">·</span>
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">{doc.speaker}</span>
+                  </div>
+
+                  <h3 className="text-2xl md:text-4xl font-black mb-3 tracking-tight">
+                    {doc.title}
+                  </h3>
+                  <p className="text-zinc-400 mb-6 max-w-xl leading-relaxed">
+                    {doc.description}
+                  </p>
+
+                  <button
+                    onClick={() => setOpenDoc(doc)}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 text-[11px] font-bold uppercase tracking-[0.2em] border transition-all duration-300 hover:bg-[#F4BE44] hover:text-black"
+                    style={{ color: "#F4BE44", borderColor: "#F4BE44" }}
+                    data-testid={`button-watch-${doc.id}`}
+                  >
+                    <Play size={12} strokeWidth={2.5} />
+                    {t("docs.watch")}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-12 flex justify-center">
+            <Link href="/archive" data-testid="link-view-archive">
+              <button
+                className="inline-flex items-center gap-2 px-8 py-3 text-[11px] font-bold uppercase tracking-[0.25em] border transition-all duration-300 hover:bg-[#F4BE44] hover:text-black"
+                style={{ color: "#F4BE44", borderColor: "#F4BE44" }}
+              >
+                <Library size={12} strokeWidth={2.5} />
+                View Full Archive
+                <ArrowUpRight size={12} strokeWidth={2.5} />
+              </button>
+            </Link>
+          </div>
+        </section>
       </main>
 
+      {openDoc && <CinemaModal doc={openDoc} onClose={() => setOpenDoc(null)} />}
+
       {/* FOOTER NAVIGATION PILL */}
-      <footer className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 w-full max-w-[720px] px-6">
+      <footer className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 w-full max-w-[820px] px-4">
         <div className="bg-[#0d0d0f]/80 backdrop-blur-2xl border border-white/10 rounded-full p-2 flex items-center justify-between">
           {[
-            { id: "radio", label: "Radio & TV", icon: MonitorPlay },
-            { id: "live", label: "Live", icon: Radio },
-            { id: "social", label: "Social", icon: Globe },
-            { id: "music", label: "Music", icon: Music2 },
-            { id: "library", label: "Library", icon: Library },
+            { id: "movies", label: "Movies+", icon: Film, href: "/movies", gold: true },
+            { id: "radio", label: "Radio & TV", icon: MonitorPlay, href: "/explore" },
+            { id: "live", label: "Live", icon: Radio, href: "/explore" },
+            { id: "social", label: "Social", icon: Globe, href: "/explore" },
+            { id: "music", label: "Music", icon: Music2, href: "/explore" },
+            { id: "library", label: "Library", icon: Library, href: "/explore" },
           ].map((item) => (
-            <Link key={item.id} href="/explore" data-testid={`nav-${item.id}`}>
+            <Link key={item.id} href={item.href} data-testid={`nav-${item.id}`}>
               <button
                 onClick={() => setActiveTab(item.id)}
-                className={`flex items-center space-x-3 px-4 sm:px-6 py-3.5 rounded-full transition-all duration-300 relative group
+                aria-label={item.label}
+                className={`flex items-center space-x-2 sm:space-x-3 px-3 sm:px-5 py-3.5 rounded-full transition-all duration-300 relative group
                   ${activeTab === item.id ? "bg-accent/10" : "hover:bg-white/5"}
                 `}
               >
-                <item.icon size={18} className={activeTab === item.id ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"} />
+                <item.icon
+                  size={18}
+                  style={item.gold ? { color: "#F4BE44" } : undefined}
+                  className={item.gold ? "" : (activeTab === item.id ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300")}
+                />
                 <span className={`text-[10px] font-black uppercase tracking-widest hidden lg:block
                   ${activeTab === item.id ? "text-white" : "text-zinc-500"}
                 `}>
-                  {item.label}
+                  {item.gold ? (
+                    <>Movies<span style={{ color: "#F4BE44" }}>+</span></>
+                  ) : (
+                    item.label
+                  )}
                 </span>
                 {activeTab === item.id && (
                   <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1 bg-accent rounded-full shadow-[0_0_10px_#F4BE44]" />
@@ -408,8 +521,11 @@ export default function Home() {
       <div className="max-w-[1440px] mx-auto px-6 md:px-10 pb-32 pt-20 flex flex-col md:flex-row items-center justify-between text-[10px] font-black text-zinc-700 uppercase tracking-widest" data-testid="text-footer">
         <p>Dark mode by default. Neon Afro-tech highlights. Micro-interactions everywhere.</p>
         <div className="flex space-x-8 mt-4 md:mt-0">
+          <Link href="/features" className="text-primary hover:text-primary/80 transition-colors" data-testid="link-footer-roadmap">
+            ROADMAP
+          </Link>
           <Link href="/blueprint" className="text-primary hover:text-primary/80 transition-colors" data-testid="link-footer-blueprint">
-            AFROKAVIAR BLUEPRINT
+            BLUEPRINT
           </Link>
           <Link href="/privacy-policy" className="hover:text-zinc-400 transition-colors" data-testid="link-footer-privacy">
             Privacy Policy

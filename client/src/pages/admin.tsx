@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X, Upload, Star, Image, Loader2, Smartphone, Monitor, Tablet } from "lucide-react";
+import { ArrowLeft, BarChart3, Check, Copy, Eye, Mail, Music, ShieldAlert, UserPlus, X, Upload, Star, Image, Loader2, Smartphone, Monitor, Tablet, Sparkles, ThumbsUp, ThumbsDown, Trash2, Plus, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +89,79 @@ export default function AdminStudio() {
   const { data: pwaData } = useQuery<PwaInstallData>({
     queryKey: ["/api/admin/pwa-installs"],
     enabled: isAdmin,
+  });
+
+  type FeatureItem = { id: string; name: string; description: string; status: string; upvotes: number; downvotes: number; };
+  const { data: featuresAdminData = [], refetch: refetchFeatures } = useQuery<FeatureItem[]>({
+    queryKey: ["/api/features"],
+    queryFn: async () => {
+      const res = await fetch("/api/features");
+      return res.ok ? res.json() : [];
+    },
+    enabled: isAdmin,
+  });
+  const [newFeatName, setNewFeatName] = useState("");
+  const [newFeatDesc, setNewFeatDesc] = useState("");
+  const [showFeatForm, setShowFeatForm] = useState(false);
+
+  const createFeatureMutation = useMutation({
+    mutationFn: async ({ name, description }: { name: string; description: string }) => {
+      const res = await fetch("/api/features", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name, description, status: "requested" }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => { refetchFeatures(); setNewFeatName(""); setNewFeatDesc(""); setShowFeatForm(false); toast({ title: "Feature created" }); },
+    onError: () => toast({ title: "Failed to create feature", variant: "destructive" }),
+  });
+
+  const updateFeatureStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const res = await fetch(`/api/features/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    onSuccess: () => refetchFeatures(),
+    onError: () => toast({ title: "Failed to update", variant: "destructive" }),
+  });
+
+  const deleteFeatureMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/features/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+    },
+    onSuccess: () => refetchFeatures(),
+    onError: () => toast({ title: "Failed to delete", variant: "destructive" }),
+  });
+
+  const refreshDocumentariesMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/documentaries/refresh", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || "Failed to refresh");
+      }
+      return res.json() as Promise<{ count: number; updatedAt: number }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/documentaries"] });
+      toast({ title: "Archive refreshed", description: `${data.count} documentaries loaded from Google Sheets.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
+    },
   });
 
   const reviewMutation = useMutation({
@@ -355,7 +428,24 @@ export default function AdminStudio() {
               <div className="font-display text-xl text-white" data-testid="text-admin-metrics-title">
                 Analytics snapshot
               </div>
-              <BarChart3 className="h-5 w-5 text-white/60" />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-white/70 hover:text-white hover:bg-white/10"
+                  onClick={() => refreshDocumentariesMutation.mutate()}
+                  disabled={refreshDocumentariesMutation.isPending}
+                  data-testid="button-refresh-documentaries"
+                >
+                  {refreshDocumentariesMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                  )}
+                  Refresh archive
+                </Button>
+                <BarChart3 className="h-5 w-5 text-white/60" />
+              </div>
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-5">
               {metrics.map((m) => (
@@ -730,6 +820,111 @@ export default function AdminStudio() {
               </div>
             )}
           </Card>
+
+          {/* Features / Roadmap Management */}
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.35 }}
+            className="lg:col-span-3"
+          >
+            <Card className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/80 backdrop-blur-md" data-testid="panel-features-admin">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-5 w-5 text-primary" />
+                  <div>
+                    <div className="font-display text-xl text-white">Features Roadmap</div>
+                    <div className="text-sm text-white/50">{featuresAdminData.length} features · <Link href="/features" className="text-primary hover:underline">View public page →</Link></div>
+                  </div>
+                </div>
+                <button
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-black text-sm font-bold hover:opacity-90 transition-all"
+                  onClick={() => setShowFeatForm(!showFeatForm)}
+                  data-testid="button-admin-add-feature"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Feature
+                </button>
+              </div>
+
+              {showFeatForm && (
+                <div className="mb-5 p-4 rounded-xl bg-black/30 border border-white/10 space-y-3">
+                  <Input
+                    placeholder="Feature name"
+                    value={newFeatName}
+                    onChange={(e) => setNewFeatName(e.target.value)}
+                    className="bg-black/40 border-white/10 text-white text-sm"
+                    data-testid="input-admin-feature-name"
+                  />
+                  <Input
+                    placeholder="Description"
+                    value={newFeatDesc}
+                    onChange={(e) => setNewFeatDesc(e.target.value)}
+                    className="bg-black/40 border-white/10 text-white text-sm"
+                    data-testid="input-admin-feature-desc"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      className="bg-primary text-black hover:opacity-90"
+                      disabled={!newFeatName.trim() || !newFeatDesc.trim() || createFeatureMutation.isPending}
+                      onClick={() => createFeatureMutation.mutate({ name: newFeatName, description: newFeatDesc })}
+                      data-testid="button-admin-feature-create"
+                    >
+                      {createFeatureMutation.isPending ? "Creating..." : "Create"}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="text-zinc-400 hover:text-white" onClick={() => setShowFeatForm(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {featuresAdminData.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-[1fr_100px_80px_80px_40px] gap-3 text-[10px] uppercase tracking-widest text-white/40 px-3 pb-1 hidden sm:grid">
+                    <span>Feature</span>
+                    <span>Status</span>
+                    <span className="flex items-center gap-1"><ThumbsUp className="w-3 h-3" /> Up</span>
+                    <span className="flex items-center gap-1"><ThumbsDown className="w-3 h-3" /> Down</span>
+                    <span></span>
+                  </div>
+                  {featuresAdminData.map((feat) => (
+                    <div key={feat.id} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_100px_80px_80px_40px] gap-2 items-center px-3 py-3 rounded-xl bg-black/20 border border-white/5" data-testid={`row-admin-feature-${feat.id}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-white truncate">{feat.name}</p>
+                        <p className="text-xs text-white/40 truncate hidden sm:block">{feat.description}</p>
+                      </div>
+                      <Select value={feat.status} onValueChange={(v) => updateFeatureStatusMutation.mutate({ id: feat.id, status: v })}>
+                        <SelectTrigger className="h-7 bg-zinc-900 border-zinc-700 text-white text-xs rounded-full px-2" data-testid={`select-admin-feature-status-${feat.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-900 border-zinc-700 text-white">
+                          <SelectItem value="requested">Requested</SelectItem>
+                          <SelectItem value="confirmed">Coming Soon</SelectItem>
+                          <SelectItem value="deployed">Deployed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <span className="text-sm text-green-400 font-bold text-center hidden sm:block">{feat.upvotes}</span>
+                      <span className="text-sm text-red-400 font-bold text-center hidden sm:block">{feat.downvotes}</span>
+                      <button
+                        className="p-1.5 rounded-full text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        onClick={() => confirm(`Delete "${feat.name}"?`) && deleteFeatureMutation.mutate(feat.id)}
+                        data-testid={`button-admin-feature-delete-${feat.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-white/30 text-sm">
+                  No features yet. Create your first feature card to start the roadmap.
+                </div>
+              )}
+            </Card>
+          </motion.div>
+
         </motion.div>
       </div>
 

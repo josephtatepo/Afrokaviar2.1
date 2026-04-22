@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -8,6 +8,7 @@ import {
   Clock,
   Eye,
   FileText,
+  Film,
   Globe,
   Headphones,
   Heart,
@@ -49,9 +50,19 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   ArrowUp,
   Bookmark,
   BookmarkCheck,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  FolderInput,
+  FolderX,
+  Pencil,
+  Check,
+  Repeat,
+  SkipForward,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
@@ -70,6 +81,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MoviesContent } from "@/pages/movies";
 
 function extractYouTubeId(text: string): string | null {
   const patterns = [
@@ -89,6 +101,15 @@ function extractYouTubeId(text: string): string | null {
 function extractInstagramId(url: string): string | null {
   const match = url.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:p|reel|tv)\/([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
+}
+
+function extractSunoId(url: string): string | null {
+  const match = url.match(/(?:https?:\/\/)?(?:www\.)?(?:suno\.com|suno\.ai)\/(?:song\/|embed\/)([a-zA-Z0-9-]+)/);
+  return match ? match[1] : null;
+}
+
+function isSunoUrl(url: string): boolean {
+  return !!extractSunoId(url);
 }
 
 function isYouTubeUrl(url: string): boolean {
@@ -178,9 +199,23 @@ type LibraryItem = {
   objectPath?: string;
   audioUrl?: string;
   fileSize?: number;
+  folderId?: string | null;
+};
+
+type LibraryFolder = {
+  id: string;
+  name: string;
+  parentId?: string | null;
+  createdAt: string;
 };
 
 type FileCategory = "audio" | "image" | "video" | "pdf" | "unknown";
+
+function normalizeContentType(type?: string): string {
+  if (!type) return "application/octet-stream";
+  if (type === "audio/mp3" || type === "audio/x-mp3" || type === "audio/x-mpeg") return "audio/mpeg";
+  return type;
+}
 
 function getFileCategory(contentType?: string): FileCategory {
   if (!contentType) return "unknown";
@@ -423,6 +458,7 @@ function TabIcon({ name }: { name: string }) {
 }
 
 const NAV_ITEMS = [
+  { id: 'movies', label: 'Movies+', icon: Film },
   { id: 'radio-tv', label: 'Radio & TV', icon: MonitorPlay },
   { id: 'live', label: 'Live', icon: RadioIcon },
   { id: 'social', label: 'Social', icon: Globe },
@@ -431,7 +467,7 @@ const NAV_ITEMS = [
 ] as const;
 
 export default function ExplorePage() {
-  const [tab, setTab] = useState("radio-tv");
+  const [tab, setTab] = useState("movies");
   const [query, setQuery] = useState("");
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -483,6 +519,7 @@ export default function ExplorePage() {
   const [tvGroup, setTvGroup] = useState<string>("all");
   const [playingChannelId, setPlayingChannelId] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [isPlayingNow, setIsPlayingNow] = useState(false);
 
   // Radio embed
   const [radioEmbedCode, setRadioEmbedCode] = useState<string>(
@@ -695,6 +732,7 @@ export default function ExplorePage() {
     referenceId?: string | null;
     objectPath?: string | null;
     fileSize?: number | null;
+    folderId?: string | null;
     metadata?: { title?: string; artist?: string; contentType?: string } | null;
     createdAt: string;
   };
@@ -716,6 +754,16 @@ export default function ExplorePage() {
       return res.json();
     },
     enabled: (tab === "library" || tab === "music") && isAuthenticated,
+  });
+
+  const { data: foldersData = [], refetch: refetchFolders } = useQuery<LibraryFolder[]>({
+    queryKey: ["/api/me/folders"],
+    queryFn: async () => {
+      const res = await fetch("/api/me/folders", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: tab === "library" && isAuthenticated,
   });
 
   // Track which free songs are already in library
@@ -815,6 +863,14 @@ export default function ExplorePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState<"all" | "purchases" | "uploads" | "free">("all");
   const [viewingItem, setViewingItem] = useState<LibraryItem | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null); // null=all, "__root__"=unfiled
+  const [newFolderName, setNewFolderName] = useState("");
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  const [dragItemId, setDragItemId] = useState<string | null>(null);
+  const folderImportRef = useRef<HTMLInputElement>(null);
   const [postText, setPostText] = useState("");
   const [postImageFile, setPostImageFile] = useState<File | null>(null);
   const [postImagePreview, setPostImagePreview] = useState<string | null>(null);
@@ -839,6 +895,10 @@ export default function ExplorePage() {
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
   const [nowPlayingId, setNowPlayingId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [continuousPlay, setContinuousPlay] = useState(true);
+  const playQueueRef = useRef<{ id: string; title: string; audioUrl: string }[]>([]);
   const [radioVolume, setRadioVolume] = useState(80);
   const [isPiPActive, setIsPiPActive] = useState(false);
   const [isTheaterMode, setIsTheaterMode] = useState(false);
@@ -848,6 +908,53 @@ export default function ExplorePage() {
     setIsTheaterMode(false);
     if (videoRef.current) { videoRef.current.muted = false; }
   };
+
+  const formatTime = (secs: number) => {
+    if (!isFinite(secs) || secs < 0) return "0:00";
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const playNextInQueue = useCallback(() => {
+    const queue = playQueueRef.current;
+    if (!queue.length || !nowPlayingId) return false;
+    const idx = queue.findIndex(q => q.id === nowPlayingId);
+    const next = idx >= 0 && idx < queue.length - 1 ? queue[idx + 1] : null;
+    if (next && audioRef.current) {
+      setNowPlaying(next.title);
+      setNowPlayingId(next.id);
+      setCurrentTime(0);
+      setDuration(0);
+      audioRef.current.src = next.audioUrl;
+      audioRef.current.play().catch(() => {});
+      setIsPlaying(true);
+      return true;
+    }
+    return false;
+  }, [nowPlayingId]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onMeta = () => setDuration(audio.duration || 0);
+    const onEnded = () => {
+      if (continuousPlay && playNextInQueue()) return;
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+    audio.addEventListener("timeupdate", onTime);
+    audio.addEventListener("loadedmetadata", onMeta);
+    audio.addEventListener("durationchange", onMeta);
+    audio.addEventListener("ended", onEnded);
+    return () => {
+      audio.removeEventListener("timeupdate", onTime);
+      audio.removeEventListener("loadedmetadata", onMeta);
+      audio.removeEventListener("durationchange", onMeta);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, [continuousPlay, playNextInQueue]);
 
   useEffect(() => {
     if (isTheaterMode) {
@@ -1141,6 +1248,7 @@ export default function ExplorePage() {
       contentType: (item.metadata as any)?.contentType || "",
       objectPath: item.objectPath || undefined,
       fileSize: item.fileSize || undefined,
+      folderId: item.folderId || null,
     }));
 
     const freeItems: LibraryItem[] = libraryFreeData.map(item => {
@@ -1168,8 +1276,86 @@ export default function ExplorePage() {
         if (libraryFilter === "uploads") return i.kind === "upload";
         return true;
       })
+      .filter((i) => {
+        if (selectedFolderId === null) return true; // show all
+        if (selectedFolderId === "__root__") return !i.folderId; // unfiled only
+        return i.folderId === selectedFolderId; // specific folder
+      })
       .filter((i) => (q ? `${i.title} ${i.artist ?? ""}`.toLowerCase().includes(q) : true));
-  }, [allLibraryItems, libraryFilter, query]);
+  }, [allLibraryItems, libraryFilter, selectedFolderId, query]);
+
+  const createFolderMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await fetch("/api/me/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error("Failed to create folder");
+      return res.json() as Promise<LibraryFolder>;
+    },
+    onSuccess: () => { refetchFolders(); },
+    onError: () => toast({ title: "Failed to create folder", variant: "destructive" }),
+  });
+
+  const renameFolderMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const res = await fetch(`/api/me/folders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error("Failed to rename folder");
+      return res.json() as Promise<LibraryFolder>;
+    },
+    onSuccess: () => { refetchFolders(); setRenamingFolderId(null); },
+    onError: () => toast({ title: "Failed to rename folder", variant: "destructive" }),
+  });
+
+  const deleteFolderMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/me/folders/${id}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to delete folder");
+      return res.json();
+    },
+    onSuccess: (_, id) => {
+      refetchFolders();
+      refetchLibraryUploads();
+      if (selectedFolderId === id) setSelectedFolderId(null);
+    },
+    onError: () => toast({ title: "Failed to delete folder", variant: "destructive" }),
+  });
+
+  const moveItemMutation = useMutation({
+    mutationFn: async ({ itemId, folderId }: { itemId: string; folderId: string | null }) => {
+      const res = await fetch(`/api/me/library/${itemId}/move`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ folderId }),
+      });
+      if (!res.ok) throw new Error("Failed to move item");
+      return res.json();
+    },
+    onSuccess: () => { refetchLibraryUploads(); refetchLibraryFree(); },
+    onError: () => toast({ title: "Failed to move item", variant: "destructive" }),
+  });
+
+  const deleteItemMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      const res = await fetch(`/api/me/library/${itemId}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) throw new Error("Failed to delete item");
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchLibraryUploads();
+      refetchLibraryFree();
+      toast({ title: "Item removed from library" });
+    },
+    onError: () => toast({ title: "Failed to delete item", variant: "destructive" }),
+  });
 
   function togglePlaySong(songId: string, title: string, audioUrl: string) {
     if (nowPlayingId === songId && isPlaying) {
@@ -1179,6 +1365,8 @@ export default function ExplorePage() {
       setNowPlaying(title);
       setNowPlayingId(songId);
       setIsPlaying(true);
+      setCurrentTime(0);
+      setDuration(0);
       if (audioRef.current) {
         audioRef.current.src = audioUrl;
         audioRef.current.play().catch(() => {});
@@ -1193,14 +1381,14 @@ export default function ExplorePage() {
           <Tooltip>
             <TooltipTrigger asChild>
               {user ? (
-                <span className="text-[15px] tracking-[0.18em] cursor-default block" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
-                  AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR
+                <span className="cursor-default block" data-testid="img-explore-logo">
+                  <img src="/logo-dark.png" alt="Afrokaviar" className="h-5 w-auto dark:block hidden" />
+                  <img src="/logo-light.png" alt="Afrokaviar" className="h-5 w-auto dark:hidden block" />
                 </span>
               ) : (
                 <Link href="/" data-testid="link-explore-home">
-                  <span className="text-[15px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo">
-                    AFRO<span className="text-primary mx-[4px]">•</span>KAVIAR
-                  </span>
+                  <img src="/logo-dark.png" alt="Afrokaviar" className="h-5 w-auto dark:block hidden" />
+                  <img src="/logo-light.png" alt="Afrokaviar" className="h-5 w-auto dark:hidden block" />
                 </Link>
               )}
             </TooltipTrigger>
@@ -1214,6 +1402,7 @@ export default function ExplorePage() {
           {NAV_ITEMS.map((item) => {
             const isActive = tab === item.id;
             const Icon = item.icon;
+            const isMovies = item.id === 'movies';
             return (
               <button
                 key={item.id}
@@ -1226,8 +1415,15 @@ export default function ExplorePage() {
                 <Icon
                   size={18}
                   className={`transition-colors duration-200 ${isActive ? 'text-accent' : 'group-hover:text-zinc-300'}`}
+                  style={isMovies ? { color: '#F4BE44' } : undefined}
                 />
-                <span className="text-sm font-bold tracking-tight">{item.label}</span>
+                <span className="text-sm font-bold tracking-tight">
+                  {isMovies ? (
+                    <>Movies<span style={{ color: '#F4BE44' }}>+</span></>
+                  ) : (
+                    item.label
+                  )}
+                </span>
                 {item.id === 'live' && isActive && (
                   <span className="absolute top-2 right-3 flex h-1.5 w-1.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
@@ -1330,21 +1526,29 @@ export default function ExplorePage() {
       )}
 
       <div className="fixed bottom-0 left-0 right-0 z-50 md:hidden bg-[#0a0a0b]/95 backdrop-blur-xl border-t border-zinc-800/60">
-        <div className="flex items-center justify-around px-2 py-2">
+        <div className="flex items-stretch justify-between px-1 py-2 gap-0.5">
           {NAV_ITEMS.map((item) => {
             const isActive = tab === item.id;
             const Icon = item.icon;
+            const isMovies = item.id === 'movies';
             return (
               <button
                 key={item.id}
                 onClick={() => setTab(item.id)}
                 data-testid={`tab-mobile-${item.id}`}
-                className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all ${
+                aria-label={item.label}
+                className={`flex-1 min-w-0 flex flex-col items-center justify-center px-1 py-1.5 rounded-xl transition-all ${
                   isActive ? 'text-accent' : 'text-zinc-500'
                 }`}
               >
-                <Icon size={20} />
-                <span className="text-[10px] font-bold mt-0.5">{item.label.replace(' & ', '/')}</span>
+                <Icon size={20} style={isMovies && !isActive ? { color: '#F4BE44' } : undefined} />
+                <span className="text-[9px] font-bold mt-0.5 leading-tight whitespace-nowrap hidden min-[360px]:inline">
+                  {isMovies ? (
+                    <>Movies<span style={{ color: '#F4BE44' }}>+</span></>
+                  ) : (
+                    item.label.replace(' & ', '/')
+                  )}
+                </span>
               </button>
             );
           })}
@@ -1353,9 +1557,10 @@ export default function ExplorePage() {
 
       <main className="flex-1 flex flex-col overflow-hidden">
         <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800/30 bg-[#0a0a0b]/80 backdrop-blur-md shrink-0">
-          <div className="md:hidden">
-            <span className="text-[13px] tracking-[0.18em]" style={{ fontFamily: 'Inter, sans-serif', fontWeight: 400 }} data-testid="img-explore-logo-mobile">
-              AFRO<span className="text-primary mx-[3px]">•</span>KAVIAR
+          <div className="md:hidden shrink-0">
+            <span data-testid="img-explore-logo-mobile" className="block">
+              <img src="/logo-dark.png" alt="Afrokaviar" className="h-[17px] w-auto max-w-none dark:block hidden" />
+              <img src="/logo-light.png" alt="Afrokaviar" className="h-[17px] w-auto max-w-none dark:hidden block" />
             </span>
           </div>
           <div className="relative flex-1 max-w-xl mx-auto hidden md:block">
@@ -1368,7 +1573,7 @@ export default function ExplorePage() {
               data-testid="input-global-search"
             />
           </div>
-          <div className="flex items-center gap-3 ml-4">
+          <div className="flex items-center gap-1.5 md:gap-3 ml-4">
             <button
               onClick={() => setMobileSearchOpen(true)}
               className="md:hidden h-9 w-9 rounded-full flex items-center justify-center bg-white/10 text-white/70 hover:bg-white/20 hover:text-white border border-white/10 transition-all"
@@ -1679,7 +1884,10 @@ export default function ExplorePage() {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto pb-20 md:pb-6">
+        <div
+          className="flex-1 overflow-y-auto pb-20 md:pb-6"
+          style={{ backgroundColor: "#000" }}
+        >
           <div className="mx-auto w-full max-w-6xl px-6 py-6">
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className="hidden">
@@ -1687,6 +1895,10 @@ export default function ExplorePage() {
                   <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>
                 ))}
               </TabsList>
+
+                <TabsContent value="movies" className="mt-0">
+                  <MoviesContent searchQuery={query} />
+                </TabsContent>
 
                 <TabsContent value="radio-tv" className="mt-0">
                   <div className="grid gap-6 lg:grid-cols-5">
@@ -1743,7 +1955,14 @@ export default function ExplorePage() {
                         )}
                       </div>
 
-                      <div className="mt-[12px] overflow-hidden rounded-xl bg-black" data-testid="panel-player">
+                      <div
+                        className="mt-[12px] overflow-hidden rounded-xl bg-black"
+                        data-testid="panel-player"
+                        style={{
+                          border: "1px solid #F4BE44",
+                          boxShadow: "0 0 50px rgba(244,190,68,0.25)",
+                        }}
+                      >
                         <div className="aspect-video">
                           {activeChannel ? (
                             streamError ? (
@@ -1773,19 +1992,50 @@ export default function ExplorePage() {
                                 </div>
                               </div>
                             ) : (
-                              <div className="h-full w-full">
+                              <div className="relative h-full w-full">
                                 <video
                                   ref={videoRef}
                                   key={activeChannel.id + "-" + playingChannelId}
                                   className="h-full w-full"
                                   controls
                                   autoPlay
+                                  muted
                                   playsInline
                                   data-testid="video-tv"
+                                  onLoadStart={() => setIsPlayingNow(false)}
+                                  onWaiting={() => setIsPlayingNow(false)}
+                                  onPlaying={() => setIsPlayingNow(true)}
+                                  onPause={() => setIsPlayingNow(false)}
                                   onError={() => setStreamError("Stream failed to load")}
                                 >
                                   <source src={activeChannel.iptvUrl} />
                                 </video>
+                                {!isPlayingNow && (
+                                  <button
+                                    onClick={() => {
+                                      const v = videoRef.current;
+                                      if (v) {
+                                        v.muted = false;
+                                        v.play().catch(() => {
+                                          v.muted = true;
+                                          v.play().catch(() => {});
+                                        });
+                                      }
+                                    }}
+                                    className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-sm transition-opacity hover:bg-black/40"
+                                    data-testid="button-tap-to-play"
+                                  >
+                                    <div
+                                      className="heartbeat-pulse flex h-20 w-20 items-center justify-center rounded-full"
+                                      style={{ backgroundColor: 'rgba(244,190,68,0.95)' }}
+                                    >
+                                      <Play size={36} fill="#000" style={{ color: '#000', marginLeft: 4 }} />
+                                    </div>
+                                    <div className="text-xs text-white/70">
+                                      {activeChannel.name}
+                                    </div>
+                                  </button>
+                                )}
                               </div>
                             )
                           ) : (
@@ -1805,7 +2055,7 @@ export default function ExplorePage() {
                       </div>
 
                       <div className="mt-4">
-                        <div className="rounded-xl border border-white/10 p-3" data-testid="panel-radio">
+                        <div className="rounded-xl border border-zinc-800 bg-[#0d0d10] p-3 shadow-lg" data-testid="panel-radio">
                           <div className="w-full select-none">
                             <div className="flex items-center space-x-3 mb-5 px-2">
                               <div className="p-1.5 bg-accent/10 rounded-lg">
@@ -2114,19 +2364,10 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    {nowPlaying && (
-                      <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-4 mb-4 flex items-center justify-between" data-testid="panel-music-player">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50">
-                            <Music className="w-5 h-5 text-primary" />
-                          </div>
-                          <div>
-                            <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">{t("music.now_playing")}</div>
-                            <div className="font-bold text-white text-sm truncate max-w-[250px]">{nowPlaying}</div>
-                          </div>
-                        </div>
+                    <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-5 mb-4" data-testid="panel-music-player">
+                      <div className="flex items-center gap-4">
                         <button
-                          className={`p-2.5 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-primary text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
+                          className="shrink-0 w-14 h-14 rounded-full bg-primary text-black flex items-center justify-center shadow-lg shadow-primary/30 hover:scale-105 active:scale-95 transition-all"
                           data-testid="button-music-toggleplay"
                           onClick={() => {
                             if (audioRef.current) {
@@ -2140,10 +2381,73 @@ export default function ExplorePage() {
                             }
                           }}
                         >
-                          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                          {isPlaying
+                            ? <Pause className="w-6 h-6" />
+                            : <Play className="w-6 h-6 ml-0.5" />}
                         </button>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-0.5">
+                            {t("music.now_playing")}
+                          </div>
+                          <div className="font-bold text-white text-base truncate mb-2" data-testid="text-music-nowplaying">
+                            {nowPlaying ?? t("library.nothing_yet")}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-mono text-zinc-500 w-8 text-right shrink-0">
+                              {formatTime(currentTime)}
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={duration || 1}
+                              step={0.1}
+                              value={currentTime}
+                              onChange={(e) => {
+                                const t = parseFloat(e.target.value);
+                                setCurrentTime(t);
+                                if (audioRef.current) audioRef.current.currentTime = t;
+                              }}
+                              className="flex-1 h-1.5 rounded-full accent-primary cursor-pointer"
+                              style={{ accentColor: "var(--color-primary)" }}
+                              data-testid="input-music-scrubber"
+                            />
+                            <span className="text-[11px] font-mono text-zinc-500 w-8 shrink-0">
+                              {formatTime(duration)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            className="p-2 rounded-full text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all"
+                            onClick={() => {
+                              const queue = playQueueRef.current;
+                              if (!queue.length || !nowPlayingId) return;
+                              const idx = queue.findIndex(q => q.id === nowPlayingId);
+                              const next = idx >= 0 && idx < queue.length - 1 ? queue[idx + 1] : null;
+                              if (next) {
+                                playQueueRef.current = queue;
+                                togglePlaySong(next.id, next.title, next.audioUrl);
+                              }
+                            }}
+                            data-testid="button-music-skip"
+                            title="Next"
+                          >
+                            <SkipForward className="w-4 h-4" />
+                          </button>
+                          <button
+                            className={`p-2 rounded-full transition-all ${continuousPlay ? 'text-primary bg-primary/10' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                            onClick={() => setContinuousPlay(!continuousPlay)}
+                            data-testid="button-music-continuous"
+                            title={continuousPlay ? "Continuous play ON" : "Continuous play OFF"}
+                          >
+                            <Repeat className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                    )}
+                    </div>
 
                     <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
                       <div className="flex items-center space-x-6">
@@ -2180,7 +2484,7 @@ export default function ExplorePage() {
                             return (
                               <div
                                 key={s.id}
-                                className="group grid grid-cols-[60px_1fr_80px_100px_140px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
+                                className="group grid grid-cols-[40px_1fr_auto] sm:grid-cols-[60px_1fr_80px_100px_140px] items-center px-3 sm:px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-default"
                                 data-testid={`row-song-${s.id}`}
                                 data-content-id={`song-${s.id}`}
                               >
@@ -2191,7 +2495,11 @@ export default function ExplorePage() {
                                     </span>
                                     <button 
                                       className="absolute opacity-0 group-hover:opacity-100 bg-primary rounded-full text-black p-2 transition-all transform scale-50 group-hover:scale-100  hover:bg-primary/90"
-                                      onClick={() => { togglePlaySong(s.id, `${s.title} — ${s.artist}`, s.audioUrl); recordTap("music", `song-${s.id}`, "song", s.title); }}
+                                      onClick={() => {
+                                        playQueueRef.current = filteredSongs.map(song => ({ id: song.id, title: `${song.title} — ${song.artist}`, audioUrl: song.audioUrl }));
+                                        togglePlaySong(s.id, `${s.title} — ${s.artist}`, s.audioUrl);
+                                        recordTap("music", `song-${s.id}`, "song", s.title);
+                                      }}
                                       data-testid={`button-song-play-${s.id}`}
                                     >
                                       {nowPlayingId === s.id && isPlaying ? (
@@ -2203,8 +2511,8 @@ export default function ExplorePage() {
                                   </div>
                                 </div>
 
-                                <div className="flex items-center space-x-5 overflow-hidden">
-                                  <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all  relative overflow-hidden" data-testid={`img-song-thumb-${s.id}`}>
+                                <div className="flex items-center space-x-3 sm:space-x-5 overflow-hidden">
+                                  <div className="w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all  relative overflow-hidden" data-testid={`img-song-thumb-${s.id}`}>
                                     {s.artworkUrl ? (
                                       <img src={s.artworkUrl} alt={s.title} className="w-full h-full object-cover" />
                                     ) : (
@@ -2247,37 +2555,9 @@ export default function ExplorePage() {
                                   {s.genre ?? "—"}
                                 </div>
 
-                                <div className="flex items-center space-x-2 justify-end pr-2">
+                                <div className="flex items-center space-x-1 sm:space-x-2 justify-end pr-1 sm:pr-2">
                                   <button 
-                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${reaction === "up" ? 'text-primary' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
-                                    aria-label={reaction === "up" ? "Remove thumbs up" : "Thumbs up"}
-                                    onClick={() => {
-                                      if (!isAuthenticated) {
-                                        toast({ title: "Please log in", description: "You need to be logged in to react to songs" });
-                                        return;
-                                      }
-                                      toggleReactionMutation.mutate({ songId: s.id, type: "up", currentType: reaction });
-                                    }}
-                                    data-testid={`button-song-thumbsup-${s.id}`}
-                                  >
-                                    <ThumbsUp className={`w-4 h-4 ${reaction === "up" ? 'fill-current' : ''}`} />
-                                  </button>
-                                  <button 
-                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${reaction === "down" ? 'text-amber-500' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
-                                    aria-label={reaction === "down" ? "Remove thumbs down" : "Thumbs down"}
-                                    onClick={() => {
-                                      if (!isAuthenticated) {
-                                        toast({ title: "Please log in", description: "You need to be logged in to react to songs" });
-                                        return;
-                                      }
-                                      toggleReactionMutation.mutate({ songId: s.id, type: "down", currentType: reaction });
-                                    }}
-                                    data-testid={`button-song-thumbsdown-${s.id}`}
-                                  >
-                                    <ThumbsDown className={`w-4 h-4 ${reaction === "down" ? 'fill-current' : ''}`} />
-                                  </button>
-                                  <button 
-                                    className={`p-2.5 rounded-full transition-all hover:scale-110 ${fav ? 'text-primary' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                                    className={`p-1.5 sm:p-2.5 rounded-full transition-all hover:scale-110 ${fav ? 'text-primary' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
                                     aria-label={fav ? "Remove from favourites" : "Add to favourites"}
                                     onClick={() => {
                                       if (!isAuthenticated) {
@@ -2288,7 +2568,7 @@ export default function ExplorePage() {
                                     }}
                                     data-testid={`button-song-favourite-${s.id}`}
                                   >
-                                    <Heart className={`w-4 h-4 ${fav ? 'fill-current' : ''}`} />
+                                    <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${fav ? 'fill-current' : ''}`} />
                                   </button>
                                   {ownedSongs[s.id] ? (
                                     <button
@@ -2824,6 +3104,18 @@ export default function ExplorePage() {
                                   </div>
                                 )}
 
+                                {post.textContent && extractSunoId(post.textContent) && (
+                                  <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50">
+                                    <iframe
+                                      src={`https://suno.com/embed/${extractSunoId(post.textContent!)}?utm_source=generator`}
+                                      className="w-full"
+                                      style={{ height: 152 }}
+                                      allow="autoplay"
+                                      data-testid={`suno-embed-text-${post.id}`}
+                                    />
+                                  </div>
+                                )}
+
                                 {post.imageUrl && (
                                   <div className="mb-6 rounded-2xl overflow-hidden border border-zinc-800/50 cursor-pointer" onClick={() => setLightboxImage(post.imageUrl!)}>
                                     <img src={post.imageUrl} alt="" className="w-full max-h-[500px] object-cover" data-testid={`img-post-image-${post.id}`} />
@@ -2853,6 +3145,16 @@ export default function ExplorePage() {
                                             allowFullScreen
                                           />
                                         </div>
+                                      </div>
+                                    ) : isSunoUrl(post.linkUrl) ? (
+                                      <div className="rounded-2xl overflow-hidden border border-zinc-800/50">
+                                        <iframe
+                                          src={`https://suno.com/embed/${extractSunoId(post.linkUrl!)}?utm_source=generator`}
+                                          className="w-full"
+                                          style={{ height: 152 }}
+                                          allow="autoplay"
+                                          data-testid={`suno-embed-link-${post.id}`}
+                                        />
                                       </div>
                                     ) : isInstagramUrl(post.linkUrl) ? (
                                       <div className="rounded-2xl overflow-hidden border border-zinc-800/50">
@@ -3338,186 +3640,504 @@ export default function ExplorePage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
-                      <div className="flex items-center space-x-6">
-                        <span className="text-zinc-600">Total: {filteredLibrary.length} items</span>
-                        {storageData && (
-                          <span className={`${isStorageFull && !isAdmin ? 'text-red-400' : 'text-zinc-600'}`} data-testid="text-storage-used">
-                            Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'} ({isAdmin ? '∞' : <span className="text-accent">{storagePercent}%</span>})
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center space-x-2 text-zinc-600">
-                        <Library className="w-3.5 h-3.5" />
-                        <span>{t("library.your_collection")}</span>
-                      </div>
-                    </div>
-
-                    <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-5 mb-6 " data-testid="panel-library-player">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center space-x-4">
-                          <div className="w-14 h-14 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 ">
-                            <Music className="w-6 h-6 text-primary" />
-                          </div>
-                          <div>
-                            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500" data-testid="text-library-nowplaying-label">
-                              {t("library.now_playing")}
-                            </div>
-                            <div className="font-bold text-white text-lg" data-testid="text-library-nowplaying">
-                              {nowPlaying ?? t("library.nothing_yet")}
-                            </div>
-                          </div>
-                        </div>
-                        <button
-                          className={`p-3 rounded-full transition-all transform hover:scale-110 ${isPlaying ? 'bg-primary text-black' : 'bg-zinc-800 text-white hover:bg-zinc-700'}`}
-                          data-testid="button-library-toggleplay"
-                          onClick={() => {
-                            if (audioRef.current) {
-                              if (isPlaying) {
-                                audioRef.current.pause();
-                                setIsPlaying(false);
-                              } else {
-                                audioRef.current.play().catch(() => {});
-                                setIsPlaying(true);
+                    {/* Hidden folder-import input (webkitdirectory) */}
+                    <input
+                      ref={folderImportRef}
+                      type="file"
+                      // @ts-ignore
+                      webkitdirectory="true"
+                      multiple
+                      className="hidden"
+                      onChange={async (e) => {
+                        const files = Array.from(e.target.files || []);
+                        if (!files.length) return;
+                        const folderName = files[0].webkitRelativePath.split("/")[0] || "Imported Folder";
+                        const folder = await createFolderMutation.mutateAsync(folderName);
+                        let succeeded = 0;
+                        for (const file of files) {
+                          try {
+                            const res = await fetch("/api/me/library/presigned", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              credentials: "include",
+                              body: JSON.stringify({ fileName: file.name, contentType: file.type || "application/octet-stream", fileSize: file.size }),
+                            });
+                            if (!res.ok) continue;
+                            const { uploadUrl, objectPath } = await res.json();
+                            await fetch(uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+                            const createRes = await fetch("/api/me/library", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              credentials: "include",
+                              body: JSON.stringify({ type: "upload", objectPath, fileSize: file.size, metadata: { title: file.name, contentType: file.type || "application/octet-stream" } }),
+                            });
+                            if (createRes.ok) {
+                              const newItem = await createRes.json();
+                              if (newItem?.id) {
+                                await fetch(`/api/me/library/${newItem.id}/move`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  credentials: "include",
+                                  body: JSON.stringify({ folderId: folder.id }),
+                                });
                               }
+                              succeeded++;
                             }
-                          }}
-                        >
-                          {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                        </button>
-                      </div>
-                    </div>
+                          } catch { /* skip failed files */ }
+                        }
+                        // After uploads, move all items to the folder — the items will have been just created
+                        await refetchLibraryUploads();
+                        toast({ title: `Imported ${succeeded} files into "${folderName}"` });
+                        e.target.value = "";
+                      }}
+                    />
 
-                    <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden ">
-                      <div className="grid grid-cols-[60px_1fr_80px_100px_100px_100px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
-                        <div className="text-center">#</div>
-                        <div>Title / Artist</div>
-                        <div className="hidden sm:block">Time</div>
-                        <div className="hidden md:block">Genre</div>
-                        <div className="hidden md:block px-4">Kind</div>
-                        <div className="text-right pr-6">Actions</div>
-                      </div>
+                    {/* 2-column layout: sidebar + content */}
+                    <div className="flex gap-4 md:gap-6 items-start">
 
-                      <div className="divide-y divide-zinc-800/40">
-                        {filteredLibrary.length === 0 ? (
-                          <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-library-empty">
-                            {t("library.no_items")}
-                          </div>
-                        ) : (
-                          filteredLibrary.map((item, index) => (
-                            <div 
-                              key={item.id}
-                              className="group grid grid-cols-[60px_1fr_80px_100px_100px_100px] items-center px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-pointer"
-                              data-testid={`row-library-${item.id}`}
-                              onClick={() => {
-                                const cat = getFileCategory(item.contentType);
-                                const src = item.objectPath || item.audioUrl;
-                                if (cat === "audio" || !item.objectPath) {
-                                  setNowPlaying(item.title);
-                                  setNowPlayingId(item.id);
-                                  setIsPlaying(true);
-                                  if (src && audioRef.current) {
-                                    audioRef.current.src = src;
-                                    audioRef.current.play().catch(() => {});
-                                  }
-                                } else {
-                                  setViewingItem(item);
+                      {/* Folder Sidebar — desktop only */}
+                      <div className="hidden sm:flex flex-col gap-1 w-44 shrink-0" data-testid="panel-library-folders">
+                        <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-2">
+                          {/* All Files */}
+                          <button
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all ${selectedFolderId === null ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+                            onClick={() => setSelectedFolderId(null)}
+                            data-testid="button-folder-all"
+                          >
+                            <Library className="w-4 h-4 shrink-0" />
+                            <span className="truncate">All Files</span>
+                            <span className="ml-auto text-[10px] text-zinc-600">{allLibraryItems.length}</span>
+                          </button>
+
+                          {/* Unfiled */}
+                          <button
+                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all ${selectedFolderId === "__root__" ? 'bg-white/10 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+                            onClick={() => setSelectedFolderId("__root__")}
+                            data-testid="button-folder-root"
+                            onDragOver={(e) => { e.preventDefault(); setDragOverFolderId("__root__"); }}
+                            onDragLeave={() => setDragOverFolderId(null)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setDragOverFolderId(null);
+                              const id = dragItemId || e.dataTransfer.getData("text/plain");
+                              if (id) moveItemMutation.mutate({ itemId: id, folderId: null });
+                            }}
+                            style={{ outline: dragOverFolderId === "__root__" ? "2px solid var(--color-primary)" : undefined }}
+                          >
+                            <FolderX className="w-4 h-4 shrink-0" />
+                            <span className="truncate">Unfiled</span>
+                          </button>
+
+                          {foldersData.length > 0 && <div className="border-t border-zinc-800 my-1.5" />}
+
+                          {/* Folder list */}
+                          {foldersData.map((folder) => (
+                            <div
+                              key={folder.id}
+                              className={`group flex items-center gap-1 px-2 py-1.5 rounded-xl transition-all ${selectedFolderId === folder.id ? 'bg-white/10' : 'hover:bg-white/5'} ${dragOverFolderId === folder.id ? 'ring-1 ring-primary' : ''}`}
+                              onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }}
+                              onDragLeave={() => setDragOverFolderId(null)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDragOverFolderId(null);
+                                const id = dragItemId || e.dataTransfer.getData("text/plain");
+                                if (id) moveItemMutation.mutate({ itemId: id, folderId: folder.id });
+                              }}
+                              data-testid={`folder-item-${folder.id}`}
+                            >
+                              {renamingFolderId === folder.id ? (
+                                <form
+                                  className="flex items-center gap-1 w-full"
+                                  onSubmit={(e) => { e.preventDefault(); if (renameValue.trim()) renameFolderMutation.mutate({ id: folder.id, name: renameValue.trim() }); else setRenamingFolderId(null); }}
+                                >
+                                  <input
+                                    autoFocus
+                                    className="flex-1 min-w-0 bg-zinc-800 text-white text-xs px-2 py-1 rounded-lg border border-zinc-700 focus:outline-none"
+                                    value={renameValue}
+                                    onChange={(e) => setRenameValue(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === "Escape") setRenamingFolderId(null); }}
+                                    data-testid={`input-folder-rename-${folder.id}`}
+                                  />
+                                  <button type="submit" className="text-green-400 hover:text-green-300 p-0.5" data-testid={`button-folder-rename-confirm-${folder.id}`}><Check className="w-3.5 h-3.5" /></button>
+                                </form>
+                              ) : (
+                                <>
+                                  <button
+                                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                                    onClick={() => setSelectedFolderId(folder.id)}
+                                    data-testid={`button-folder-select-${folder.id}`}
+                                  >
+                                    {selectedFolderId === folder.id
+                                      ? <FolderOpen className="w-4 h-4 shrink-0 text-primary" />
+                                      : <Folder className="w-4 h-4 shrink-0 text-zinc-400 group-hover:text-white" />}
+                                    <span className={`text-sm truncate font-medium ${selectedFolderId === folder.id ? 'text-white' : 'text-zinc-400 group-hover:text-white'}`}>{folder.name}</span>
+                                  </button>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 text-zinc-500 hover:text-zinc-200"
+                                    onClick={() => { setRenamingFolderId(folder.id); setRenameValue(folder.name); }}
+                                    data-testid={`button-folder-rename-${folder.id}`}
+                                    title="Rename"
+                                  ><Pencil className="w-3 h-3" /></button>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 text-zinc-500 hover:text-red-400"
+                                    onClick={() => { if (confirm(`Delete folder "${folder.name}"? Files will be moved to Unfiled.`)) deleteFolderMutation.mutate(folder.id); }}
+                                    data-testid={`button-folder-delete-${folder.id}`}
+                                    title="Delete folder"
+                                  ><Trash2 className="w-3 h-3" /></button>
+                                </>
+                              )}
+                            </div>
+                          ))}
+
+                          <div className="border-t border-zinc-800 my-1.5" />
+
+                          {/* New Folder */}
+                          {showNewFolderInput ? (
+                            <form
+                              className="flex items-center gap-1 px-2"
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                if (newFolderName.trim()) {
+                                  createFolderMutation.mutate(newFolderName.trim());
+                                  setNewFolderName("");
+                                  setShowNewFolderInput(false);
                                 }
                               }}
                             >
-                              <div className="flex justify-center">
-                                <button
-                                  className="relative w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent/10 transition-all"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const isThisPlaying = nowPlayingId === item.id && isPlaying;
-                                    if (isThisPlaying) {
-                                      audioRef.current?.pause();
-                                      setIsPlaying(false);
-                                    } else {
+                              <input
+                                autoFocus
+                                placeholder="Folder name"
+                                className="flex-1 min-w-0 bg-zinc-800 text-white text-xs px-2 py-1.5 rounded-lg border border-zinc-700 focus:outline-none"
+                                value={newFolderName}
+                                onChange={(e) => setNewFolderName(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Escape") { setShowNewFolderInput(false); setNewFolderName(""); } }}
+                                data-testid="input-new-folder-name"
+                              />
+                              <button type="submit" className="text-green-400 hover:text-green-300 p-0.5" data-testid="button-new-folder-confirm"><Check className="w-4 h-4" /></button>
+                            </form>
+                          ) : (
+                            <button
+                              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-500 hover:text-white hover:bg-white/5 transition-all"
+                              onClick={() => setShowNewFolderInput(true)}
+                              data-testid="button-new-folder"
+                            >
+                              <FolderPlus className="w-4 h-4 shrink-0" />
+                              <span>New Folder</span>
+                            </button>
+                          )}
+
+                          {/* Import Folder (Windows) */}
+                          <button
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-zinc-500 hover:text-white hover:bg-white/5 transition-all"
+                            onClick={() => folderImportRef.current?.click()}
+                            data-testid="button-import-folder"
+                          >
+                            <FolderInput className="w-4 h-4 shrink-0" />
+                            <span>Import Folder</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Main content */}
+                      <div className="flex-1 min-w-0">
+                        {/* Mobile: horizontal folder chips */}
+                        <div className="sm:hidden flex items-center gap-2 mb-4 overflow-x-auto pb-1">
+                          <button
+                            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${selectedFolderId === null ? 'bg-white/10 text-white border-zinc-600' : 'text-zinc-400 border-zinc-700 hover:border-zinc-500'}`}
+                            onClick={() => setSelectedFolderId(null)}
+                          >All</button>
+                          <button
+                            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${selectedFolderId === "__root__" ? 'bg-white/10 text-white border-zinc-600' : 'text-zinc-400 border-zinc-700 hover:border-zinc-500'}`}
+                            onClick={() => setSelectedFolderId("__root__")}
+                          >Unfiled</button>
+                          {foldersData.map(f => (
+                            <button
+                              key={f.id}
+                              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${selectedFolderId === f.id ? 'bg-white/10 text-white border-zinc-600' : 'text-zinc-400 border-zinc-700 hover:border-zinc-500'}`}
+                              onClick={() => setSelectedFolderId(f.id)}
+                            >{f.name}</button>
+                          ))}
+                          <button
+                            className="shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300 transition-all"
+                            onClick={() => { setShowNewFolderInput(true); }}
+                          >+ New</button>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] font-bold text-zinc-500 mb-4 uppercase tracking-widest">
+                          <div className="flex items-center space-x-6">
+                            <span className="text-zinc-600">Total: {filteredLibrary.length} items</span>
+                            {storageData && (
+                              <span className={`${isStorageFull && !isAdmin ? 'text-red-400' : 'text-zinc-600'}`} data-testid="text-storage-used">
+                                Storage: {formatBytes(storageData.usedBytes)} / {isAdmin ? '∞' : '200MB'} ({isAdmin ? '∞' : <span className="text-accent">{storagePercent}%</span>})
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-2 text-zinc-600">
+                            <Library className="w-3.5 h-3.5" />
+                            <span>{t("library.your_collection")}</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-[#121214] rounded-2xl border border-zinc-800/60 p-5 mb-6" data-testid="panel-library-player">
+                          <div className="flex items-center gap-4">
+                            {/* Big play/pause button */}
+                            <button
+                              className="shrink-0 w-14 h-14 rounded-full bg-primary text-black flex items-center justify-center shadow-lg shadow-primary/30 hover:scale-105 active:scale-95 transition-all"
+                              data-testid="button-library-toggleplay"
+                              onClick={() => {
+                                if (audioRef.current) {
+                                  if (isPlaying) {
+                                    audioRef.current.pause();
+                                    setIsPlaying(false);
+                                  } else {
+                                    audioRef.current.play().catch(() => {});
+                                    setIsPlaying(true);
+                                  }
+                                }
+                              }}
+                            >
+                              {isPlaying
+                                ? <Pause className="w-6 h-6" />
+                                : <Play className="w-6 h-6 ml-0.5" />}
+                            </button>
+
+                            {/* Track info + scrubber */}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-0.5" data-testid="text-library-nowplaying-label">
+                                {t("library.now_playing")}
+                              </div>
+                              <div className="font-bold text-white text-base truncate mb-2" data-testid="text-library-nowplaying">
+                                {nowPlaying ?? t("library.nothing_yet")}
+                              </div>
+
+                              {/* Progress scrubber */}
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-mono text-zinc-500 w-8 text-right shrink-0" data-testid="text-library-currenttime">
+                                  {formatTime(currentTime)}
+                                </span>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={duration || 1}
+                                  step={0.1}
+                                  value={currentTime}
+                                  onChange={(e) => {
+                                    const t = parseFloat(e.target.value);
+                                    setCurrentTime(t);
+                                    if (audioRef.current) audioRef.current.currentTime = t;
+                                  }}
+                                  className="flex-1 h-1.5 rounded-full accent-primary cursor-pointer"
+                                  style={{ accentColor: "var(--color-primary)" }}
+                                  data-testid="input-library-scrubber"
+                                />
+                                <span className="text-[11px] font-mono text-zinc-500 w-8 shrink-0" data-testid="text-library-duration">
+                                  {formatTime(duration)}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                className="p-2 rounded-full text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all"
+                                onClick={() => {
+                                  const queue = playQueueRef.current;
+                                  if (!queue.length || !nowPlayingId) return;
+                                  const idx = queue.findIndex(q => q.id === nowPlayingId);
+                                  const next = idx >= 0 && idx < queue.length - 1 ? queue[idx + 1] : null;
+                                  if (next) {
+                                    setNowPlaying(next.title);
+                                    setNowPlayingId(next.id);
+                                    setCurrentTime(0);
+                                    setDuration(0);
+                                    if (audioRef.current) {
+                                      audioRef.current.src = next.audioUrl;
+                                      audioRef.current.play().catch(() => {});
+                                    }
+                                    setIsPlaying(true);
+                                  }
+                                }}
+                                data-testid="button-library-skip"
+                                title="Next"
+                              >
+                                <SkipForward className="w-4 h-4" />
+                              </button>
+                              <button
+                                className={`p-2 rounded-full transition-all ${continuousPlay ? 'text-primary bg-primary/10' : 'text-zinc-500 hover:text-white hover:bg-zinc-800'}`}
+                                onClick={() => setContinuousPlay(!continuousPlay)}
+                                data-testid="button-library-continuous"
+                                title={continuousPlay ? "Continuous play ON" : "Continuous play OFF"}
+                              >
+                                <Repeat className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-[#121214] rounded-3xl border border-zinc-800/60 overflow-hidden">
+                          <div className="grid grid-cols-[60px_1fr_80px_100px_100px_120px] items-center px-6 py-4 border-b border-zinc-800/80 text-[11px] font-black text-zinc-500 uppercase tracking-[0.2em] bg-black/20">
+                            <div className="text-center">#</div>
+                            <div>Title / Artist</div>
+                            <div className="hidden sm:block">Time</div>
+                            <div className="hidden md:block">Genre</div>
+                            <div className="hidden md:block px-4">Kind</div>
+                            <div className="text-right pr-6">Actions</div>
+                          </div>
+
+                          <div className="divide-y divide-zinc-800/40">
+                            {filteredLibrary.length === 0 ? (
+                              <div className="px-6 py-8 text-sm text-zinc-400" data-testid="status-library-empty">
+                                {selectedFolderId && selectedFolderId !== "__root__" ? "This folder is empty. Drag files here." : t("library.no_items")}
+                              </div>
+                            ) : (
+                              filteredLibrary.map((item, index) => (
+                                <div
+                                  key={item.id}
+                                  className="group grid grid-cols-[40px_1fr_auto] sm:grid-cols-[60px_1fr_80px_100px_100px_120px] items-center px-3 sm:px-6 py-5 hover:bg-white/[0.04] transition-all duration-200 cursor-pointer"
+                                  data-testid={`row-library-${item.id}`}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    setDragItemId(item.id);
+                                    e.dataTransfer.setData("text/plain", item.id);
+                                    e.dataTransfer.effectAllowed = "move";
+                                  }}
+                                  onDragEnd={() => setDragItemId(null)}
+                                  onClick={() => {
+                                    const cat = getFileCategory(item.contentType);
+                                    const src = item.objectPath || item.audioUrl;
+                                    if (cat === "audio" || !item.objectPath) {
+                                      playQueueRef.current = filteredLibrary
+                                        .filter(li => getFileCategory(li.contentType) === "audio" || !li.objectPath)
+                                        .map(li => ({ id: li.id, title: li.title, audioUrl: li.objectPath || li.audioUrl || "" }));
                                       setNowPlaying(item.title);
                                       setNowPlayingId(item.id);
                                       setIsPlaying(true);
-                                      const src = item.objectPath || item.audioUrl;
-                                      if (audioRef.current && src) {
+                                      setCurrentTime(0);
+                                      setDuration(0);
+                                      if (src && audioRef.current) {
                                         audioRef.current.src = src;
                                         audioRef.current.play().catch(() => {});
                                       }
+                                    } else {
+                                      setViewingItem(item);
                                     }
                                   }}
-                                  data-testid={`button-library-play-${item.id}`}
                                 >
-                                  {nowPlayingId === item.id && isPlaying ? (
-                                    <Pause className="w-4 h-4 text-accent transition-all duration-300" />
-                                  ) : (
-                                    <Music className={`w-4 h-4 transition-all duration-300 ${nowPlayingId === item.id ? 'text-accent' : 'text-zinc-500 group-hover:text-accent'}`} style={{ animation: nowPlayingId === item.id ? 'pulse 2s ease-in-out infinite' : 'none' }} />
-                                  )}
-                                </button>
-                              </div>
+                                  <div className="flex justify-center">
+                                    <button
+                                      className="relative w-9 h-9 flex items-center justify-center rounded-full hover:bg-accent/10 transition-all"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const isThisPlaying = nowPlayingId === item.id && isPlaying;
+                                        if (isThisPlaying) {
+                                          audioRef.current?.pause();
+                                          setIsPlaying(false);
+                                        } else {
+                                          playQueueRef.current = filteredLibrary
+                                            .filter(li => getFileCategory(li.contentType) === "audio" || !li.objectPath)
+                                            .map(li => ({ id: li.id, title: li.title, audioUrl: li.objectPath || li.audioUrl || "" }));
+                                          setNowPlaying(item.title);
+                                          setNowPlayingId(item.id);
+                                          setIsPlaying(true);
+                                          setCurrentTime(0);
+                                          setDuration(0);
+                                          const src = item.objectPath || item.audioUrl;
+                                          if (audioRef.current && src) {
+                                            audioRef.current.src = src;
+                                            audioRef.current.play().catch(() => {});
+                                          }
+                                        }
+                                      }}
+                                      data-testid={`button-library-play-${item.id}`}
+                                    >
+                                      {nowPlayingId === item.id && isPlaying ? (
+                                        <Pause className="w-4 h-4 text-primary transition-all duration-300" />
+                                      ) : (
+                                        <Play className={`w-4 h-4 ml-0.5 transition-all duration-300 ${nowPlayingId === item.id ? 'text-primary' : 'text-zinc-500 group-hover:text-primary'}`} />
+                                      )}
+                                    </button>
+                                  </div>
 
-                              <div className="flex items-center space-x-5 overflow-hidden">
-                                <div className="w-12 h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all  relative overflow-hidden" data-testid={`img-library-thumb-${item.id}`}>
-                                  <FileCategoryIcon category={getFileCategory(item.contentType)} className="w-5 h-5 text-zinc-500 group-hover:text-primary transition-colors" />
-                                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
-                                </div>
-                                <div className="flex flex-col min-w-0">
-                                  <span className="font-bold text-white text-base truncate group-hover:text-primary/90 transition-colors" data-testid={`text-library-title-${item.id}`}>
-                                    {item.title}
-                                  </span>
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-library-artist-${item.id}`}>
-                                      {item.artist ?? "Unknown"}
+                                  <div className="flex items-center space-x-3 sm:space-x-5 overflow-hidden">
+                                    <div className="w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0 bg-gradient-to-br from-zinc-700 to-zinc-900 rounded-xl flex items-center justify-center border border-zinc-700/50 group-hover:border-primary/30 transition-all relative overflow-hidden" data-testid={`img-library-thumb-${item.id}`}>
+                                      <FileCategoryIcon category={getFileCategory(item.contentType)} className="w-5 h-5 text-zinc-500 group-hover:text-primary transition-colors" />
+                                      <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
+                                    </div>
+                                    <div className="flex flex-col min-w-0">
+                                      <span className="font-bold text-white text-base truncate group-hover:text-primary/90 transition-colors" data-testid={`text-library-title-${item.id}`}>
+                                        {item.title}
+                                      </span>
+                                      <div className="flex items-center space-x-2">
+                                        <span className="text-sm text-zinc-400 font-medium truncate group-hover:text-zinc-300" data-testid={`text-library-artist-${item.id}`}>
+                                          {item.artist ?? "Unknown"}
+                                        </span>
+                                        {item.fileSize && (
+                                          <span className="text-[10px] text-zinc-600 font-mono">{formatBytes(item.fileSize)}</span>
+                                        )}
+                                        {item.folderId && (
+                                          <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
+                                            <Folder className="w-2.5 h-2.5" />
+                                            {foldersData.find(f => f.id === item.folderId)?.name}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="hidden sm:block text-sm text-zinc-400 group-hover:text-zinc-200 font-mono tracking-tighter" data-testid={`text-library-duration-${item.id}`}>
+                                    3:45
+                                  </div>
+
+                                  <div className="hidden md:block text-sm text-zinc-500 group-hover:text-zinc-300" data-testid={`text-library-genre-${item.id}`}>
+                                    —
+                                  </div>
+
+                                  <div className="hidden md:block px-4">
+                                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                                      item.kind === 'purchase' ? 'bg-primary/20 text-primary' :
+                                      item.kind === 'free' ? 'bg-green-500/20 text-green-400' :
+                                      'bg-zinc-800 text-zinc-400'
+                                    }`} data-testid={`text-library-kind-${item.id}`}>
+                                      {item.kind === 'purchase' ? 'Purchased' : item.kind === 'free' ? 'Free' : getFileCategory(item.contentType).toUpperCase()}
                                     </span>
-                                    {item.fileSize && (
-                                      <span className="text-[10px] text-zinc-600 font-mono">{formatBytes(item.fileSize)}</span>
+                                  </div>
+
+                                  <div className="flex items-center space-x-1 sm:space-x-2 justify-end pr-1 sm:pr-2">
+                                    {item.objectPath && getFileCategory(item.contentType) !== "audio" && (
+                                      <button
+                                        className="hidden sm:inline-flex p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                        aria-label="Open"
+                                        onClick={(e) => { e.stopPropagation(); setViewingItem(item); }}
+                                        data-testid={`button-library-view-${item.id}`}
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                    <button
+                                      className="p-1.5 sm:p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                      aria-label="Like"
+                                      onClick={(e) => e.stopPropagation()}
+                                      data-testid={`button-library-like-${item.id}`}
+                                    >
+                                      <Heart className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                    </button>
+                                    {(item.kind === "upload" || item.kind === "free") && (
+                                      <button
+                                        className="p-1.5 sm:p-2.5 text-zinc-500 hover:text-red-400 rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
+                                        aria-label="Remove"
+                                        onClick={(e) => { e.stopPropagation(); if (confirm(`Remove "${item.title}" from library?`)) deleteItemMutation.mutate(item.id); }}
+                                        data-testid={`button-library-delete-${item.id}`}
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                                      </button>
                                     )}
                                   </div>
                                 </div>
-                              </div>
-
-                              <div className="hidden sm:block text-sm text-zinc-400 group-hover:text-zinc-200 font-mono tracking-tighter" data-testid={`text-library-duration-${item.id}`}>
-                                3:45
-                              </div>
-
-                              <div className="hidden md:block text-sm text-zinc-500 group-hover:text-zinc-300" data-testid={`text-library-genre-${item.id}`}>
-                                —
-                              </div>
-
-                              <div className="hidden md:block px-4">
-                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
-                                  item.kind === 'purchase' ? 'bg-primary/20 text-primary' : 
-                                  item.kind === 'free' ? 'bg-green-500/20 text-green-400' :
-                                  'bg-zinc-800 text-zinc-400'
-                                }`} data-testid={`text-library-kind-${item.id}`}>
-                                  {item.kind === 'purchase' ? 'Purchased' : item.kind === 'free' ? 'Free' : getFileCategory(item.contentType).toUpperCase()}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center space-x-2 justify-end pr-2">
-                                {item.objectPath && getFileCategory(item.contentType) !== "audio" && (
-                                  <button 
-                                    className="p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
-                                    aria-label="Open"
-                                    onClick={(e) => { e.stopPropagation(); setViewingItem(item); }}
-                                    data-testid={`button-library-view-${item.id}`}
-                                  >
-                                    <Eye className="w-4 h-4" />
-                                  </button>
-                                )}
-                                <button 
-                                  className="p-2.5 text-zinc-500 hover:text-primary rounded-full hover:bg-zinc-800 transition-all hover:scale-110"
-                                  aria-label="Like"
-                                  onClick={(e) => e.stopPropagation()}
-                                  data-testid={`button-library-like-${item.id}`}
-                                >
-                                  <Heart className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </div>{/* end main content */}
+                    </div>{/* end 2-col flex */}
 
                   </div>
                 </TabsContent>
@@ -3525,6 +4145,9 @@ export default function ExplorePage() {
           </div>
 
           <footer className="mx-auto w-full max-w-6xl px-6 pb-10 text-xs text-white/45" data-testid="text-explore-footer">
+            {tab === "movies" && (
+              <span className="text-primary">A private screening room — curated cinema and documentary for the diaspora.</span>
+            )}
             {tab === "radio-tv" && (
               <span className="text-primary">Radio and TV will always be free. It's Universal Culture.</span>
             )}
@@ -3616,7 +4239,7 @@ export default function ExplorePage() {
                     body: JSON.stringify({
                       name: uploadFile.name,
                       size: uploadFile.size,
-                      contentType: uploadFile.type,
+                      contentType: normalizeContentType(uploadFile.type),
                     }),
                   });
                   
@@ -3629,7 +4252,7 @@ export default function ExplorePage() {
                   const uploadRes = await fetch(uploadURL, {
                     method: "PUT",
                     body: uploadFile,
-                    headers: { "Content-Type": uploadFile.type },
+                    headers: { "Content-Type": normalizeContentType(uploadFile.type) },
                   });
                   
                   if (!uploadRes.ok) {
@@ -3886,7 +4509,7 @@ export default function ExplorePage() {
                     body: JSON.stringify({
                       name: uploadFile.name,
                       size: uploadFile.size,
-                      contentType: uploadFile.type,
+                      contentType: normalizeContentType(uploadFile.type),
                     }),
                   });
                   
@@ -3899,7 +4522,7 @@ export default function ExplorePage() {
                   const uploadRes = await fetch(uploadURL, {
                     method: "PUT",
                     body: uploadFile,
-                    headers: { "Content-Type": uploadFile.type },
+                    headers: { "Content-Type": normalizeContentType(uploadFile.type) },
                   });
                   
                   if (!uploadRes.ok) {
@@ -3914,7 +4537,7 @@ export default function ExplorePage() {
                       type: "upload",
                       objectPath,
                       fileSize: uploadFile.size,
-                      metadata: { title: uploadTitle, artist: "You", contentType: uploadFile.type },
+                      metadata: { title: uploadTitle, artist: "You", contentType: normalizeContentType(uploadFile.type) },
                     }),
                   });
                   
@@ -4041,8 +4664,9 @@ export default function ExplorePage() {
                     headers: { "Content-Type": "application/json" },
                     credentials: "include",
                     body: JSON.stringify({
-                      fileName: musicUploadFile.name,
-                      contentType: musicUploadFile.type,
+                      name: musicUploadFile.name,
+                      size: musicUploadFile.size,
+                      contentType: normalizeContentType(musicUploadFile.type),
                     }),
                   });
                   if (!urlRes.ok) throw new Error("Failed to get upload URL");
@@ -4051,7 +4675,7 @@ export default function ExplorePage() {
                   const uploadRes = await fetch(uploadURL, {
                     method: "PUT",
                     body: musicUploadFile,
-                    headers: { "Content-Type": musicUploadFile.type },
+                    headers: { "Content-Type": normalizeContentType(musicUploadFile.type) },
                   });
                   if (!uploadRes.ok) throw new Error("Failed to upload file");
 
